@@ -1,0 +1,16 @@
+ALTER TABLE `orders` ADD COLUMN `address` TEXT NULL;
+ALTER TABLE `orders` ADD COLUMN `lat` DECIMAL(10,8) NULL;
+ALTER TABLE `orders` ADD COLUMN `lng` DECIMAL(11,8) NULL;
+ALTER TABLE `orders` ADD COLUMN `notes` TEXT NULL;
+ALTER TABLE `orders` ADD COLUMN `scheduled_date` DATE NULL;
+ALTER TABLE `orders` ADD COLUMN `scheduled_time` TIME NULL;
+ALTER TABLE `orders` ADD COLUMN `attachments` LONGTEXT NULL;
+ALTER TABLE `orders` ADD COLUMN `problem_details` LONGTEXT NULL;
+ALTER TABLE `orders` ADD COLUMN `labor_cost` DECIMAL(10,2) DEFAULT 0.00;
+ALTER TABLE `orders` ADD COLUMN `parts_cost` DECIMAL(10,2) DEFAULT 0.00;
+ALTER TABLE `orders` ADD COLUMN `min_estimate` DECIMAL(10,2) NULL;
+ALTER TABLE `orders` ADD COLUMN `max_estimate` DECIMAL(10,2) NULL;
+ALTER TABLE `orders` ADD COLUMN `invoice_status` ENUM('none','pending','approved','rejected') DEFAULT 'none';
+ALTER TABLE `orders` ADD COLUMN `invoice_items` LONGTEXT NULL;
+ALTER TABLE `orders` ADD COLUMN `inspection_notes` TEXT NULL;
+ALTER TABLE `orders` ADD COLUMN `is_rated` TINYINT(1) DEFAULT 0;

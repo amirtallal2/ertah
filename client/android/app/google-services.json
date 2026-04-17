@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "395193954939",
+    "project_id": "ertah-3510a",
+    "storage_bucket": "ertah-3510a.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:395193954939:android:337727561826608171e8de",
+        "android_client_info": {
+          "package_name": "com.ertah.ertah"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDTrUgPS2SCzUEqKUIfy6Wrv-mTYJqYZHo"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
