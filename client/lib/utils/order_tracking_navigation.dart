@@ -11,6 +11,7 @@ class OrderTrackingNavigation {
     required int orderId,
     String? categoryName,
     String? categoryIcon,
+    String? categoryImage,
   }) {
     if (orderId <= 0) {
       return Future.value();
@@ -20,7 +21,12 @@ class OrderTrackingNavigation {
       id: 0,
       nameAr: (categoryName ?? 'تفاصيل الطلب').trim(),
       nameEn: (categoryName ?? 'Order Details').trim(),
-      icon: (categoryIcon ?? '🔧').trim(),
+      icon:
+          ((categoryImage ?? '').trim().isNotEmpty
+                  ? categoryImage
+                  : categoryIcon)
+              ?.trim(),
+      image: (categoryImage ?? '').trim(),
       createdAt: DateTime.now(),
     );
 

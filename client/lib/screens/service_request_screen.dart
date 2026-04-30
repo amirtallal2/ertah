@@ -15,12 +15,27 @@ import '../widgets/guest_guard.dart';
 import '../services/app_localizations.dart';
 import '../utils/saudi_riyal_icon.dart';
 import 'location_picker_screen.dart';
+import 'static_content_page_screen.dart';
 
 class _ProblemTypeOption {
   final int? id;
   final String title;
 
   const _ProblemTypeOption({this.id, required this.title});
+}
+
+class _InspectionPolicy {
+  final String mode;
+  final double fee;
+  final String details;
+
+  const _InspectionPolicy({
+    required this.mode,
+    required this.fee,
+    this.details = '',
+  });
+
+  bool get isFree => mode != 'paid' || fee <= 0;
 }
 
 class ServiceRequestScreen extends StatefulWidget {
@@ -58,7 +73,7 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
 
   final ImagePicker _picker = ImagePicker();
   final List<XFile> _media = [];
-  String? _selectedProblemType;
+  final Set<String> _selectedProblemTypes = <String>{};
   String _customServiceTitle = '';
   List<String> _customServiceImagePaths = [];
   static const List<String> _fallbackProblemTitleKeys = [
@@ -82,6 +97,16 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
   bool _isSubmitting = false;
   bool _didInitLocalizedState = false;
 
+  void _openTermsPage() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            const StaticContentPageScreen(page: StaticContentPageKey.terms),
+      ),
+    );
+  }
+
   bool _isOtherProblemType(String? value) {
     final normalized = (value ?? '').toLowerCase().trim();
     if (normalized.isEmpty) return false;
@@ -104,9 +129,39 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
   bool get _hasCustomServiceFromSelection =>
       _customServiceTitle.trim().isNotEmpty;
 
+  List<String> get _selectedProblemTypeTitles {
+    final titles = <String>[];
+
+    for (final option in _problemTypes) {
+      final title = option.title.trim();
+      if (title.isEmpty || !_selectedProblemTypes.contains(option.title)) {
+        continue;
+      }
+      if (!titles.contains(title)) {
+        titles.add(title);
+      }
+    }
+
+    for (final selected in _selectedProblemTypes) {
+      final title = selected.trim();
+      if (title.isNotEmpty && !titles.contains(title)) {
+        titles.add(title);
+      }
+    }
+
+    return titles;
+  }
+
+  String? get _primarySelectedProblemType {
+    final titles = _selectedProblemTypeTitles;
+    return titles.isNotEmpty ? titles.first : null;
+  }
+
+  bool get _hasOtherSelectedProblemType =>
+      _selectedProblemTypeTitles.any(_isOtherProblemType);
+
   bool get _isCustomServiceSelection =>
-      _hasCustomServiceFromSelection ||
-      _isOtherProblemType(_selectedProblemType);
+      _hasCustomServiceFromSelection || _hasOtherSelectedProblemType;
 
   List<_ProblemTypeOption> _injectCustomServiceOption(
     List<_ProblemTypeOption> values,
@@ -132,7 +187,7 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
     if (customTitle.isEmpty) return;
 
     _problemTypes = _injectCustomServiceOption(_problemTypes);
-    _selectedProblemType = customTitle;
+    _selectedProblemTypes.add(customTitle);
 
     if (_descriptionController.text.trim().isEmpty) {
       _descriptionController.text = context
@@ -155,15 +210,18 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
     return context.tr('service');
   }
 
-  int? get _selectedProblemTypeId {
-    final selected = (_selectedProblemType ?? '').trim();
-    if (selected.isEmpty) return null;
+  List<int> get _selectedProblemTypeIds {
+    final ids = <int>[];
     for (final option in _problemTypes) {
-      if (option.title == selected) {
-        return option.id;
+      final id = option.id;
+      if (id == null || !_selectedProblemTypes.contains(option.title)) {
+        continue;
+      }
+      if (!ids.contains(id)) {
+        ids.add(id);
       }
     }
-    return null;
+    return ids;
   }
 
   List<_ProblemTypeOption> _ensureOtherOption(List<_ProblemTypeOption> values) {
@@ -259,13 +317,11 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
 
           setState(() {
             _problemTypes = normalizedOptions;
-            if (_hasCustomServiceFromSelection &&
-                (_selectedProblemType ?? '').trim().isEmpty) {
-              _selectedProblemType = _customServiceTitle.trim();
-            }
-            if (_selectedProblemType != null &&
-                !validTitles.contains(_selectedProblemType)) {
-              _selectedProblemType = null;
+            _selectedProblemTypes.removeWhere(
+              (title) => !validTitles.contains(title),
+            );
+            if (_hasCustomServiceFromSelection) {
+              _selectedProblemTypes.add(_customServiceTitle.trim());
             }
           });
           return;
@@ -286,13 +342,11 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
       );
 
       final validTitles = _problemTypes.map((item) => item.title).toSet();
-      if (_hasCustomServiceFromSelection &&
-          (_selectedProblemType ?? '').trim().isEmpty) {
-        _selectedProblemType = _customServiceTitle.trim();
-      }
-      if (_selectedProblemType != null &&
-          !validTitles.contains(_selectedProblemType)) {
-        _selectedProblemType = null;
+      _selectedProblemTypes.removeWhere(
+        (title) => !validTitles.contains(title),
+      );
+      if (_hasCustomServiceFromSelection) {
+        _selectedProblemTypes.add(_customServiceTitle.trim());
       }
     });
   }
@@ -1104,7 +1158,7 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
     final userDescription = _descriptionController.text.trim();
     final customFromSelection = _hasCustomServiceFromSelection;
     final customFromProblemType =
-        _isOtherProblemType(_selectedProblemType) && !customFromSelection;
+        _hasOtherSelectedProblemType && !customFromSelection;
 
     if (customFromProblemType && userDescription.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -1178,11 +1232,20 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
         });
       });
 
+      final selectedProblemTitles = _selectedProblemTypeTitles;
+      final selectedProblemTypeIds = _selectedProblemTypeIds;
+      final primaryProblemType = _primarySelectedProblemType;
+      final selectedOtherTitle = selectedProblemTitles.firstWhere(
+        _isOtherProblemType,
+        orElse: () => '',
+      );
       final effectiveCustomTitle = _hasCustomServiceFromSelection
           ? _customServiceTitle.trim()
-          : (_selectedProblemType?.trim().isNotEmpty == true
-                ? _selectedProblemType!.trim()
-                : context.tr('service_request_other_service'));
+          : (selectedOtherTitle.isNotEmpty
+                ? selectedOtherTitle
+                : (primaryProblemType?.trim().isNotEmpty == true
+                      ? primaryProblemType!.trim()
+                      : context.tr('service_request_other_service')));
       final effectiveNotes = userDescription.isNotEmpty
           ? userDescription
           : (_isCustomServiceSelection
@@ -1211,12 +1274,25 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
             : null,
         problemDetails: {
           'type':
-              _selectedProblemType ??
+              primaryProblemType ??
               (_hasCustomServiceFromSelection
                   ? 'custom_service_request'
                   : 'Other'),
-          if (_selectedProblemTypeId != null)
-            'type_option_id': _selectedProblemTypeId,
+          if (selectedProblemTitles.isNotEmpty) 'types': selectedProblemTitles,
+          if (selectedProblemTitles.isNotEmpty)
+            'problem_types': selectedProblemTitles,
+          if (selectedProblemTitles.isNotEmpty)
+            'problem_type_labels': selectedProblemTitles,
+          if (selectedProblemTitles.isNotEmpty)
+            'problem_type_titles': selectedProblemTitles,
+          if (selectedProblemTitles.isNotEmpty)
+            'selected_problem_types': selectedProblemTitles,
+          if (selectedProblemTypeIds.length == 1)
+            'type_option_id': selectedProblemTypeIds.first,
+          if (selectedProblemTypeIds.isNotEmpty)
+            'type_option_ids': selectedProblemTypeIds,
+          if (selectedProblemTypeIds.isNotEmpty)
+            'problem_type_ids': selectedProblemTypeIds,
           'user_desc': effectiveNotes,
           'category_id': widget.service.id,
           if (widget.subServices.length == 1)
@@ -1372,6 +1448,294 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
     );
   }
 
+  String _normalizeInspectionMode(dynamic value, {bool allowInherit = false}) {
+    final mode = (value ?? '').toString().toLowerCase().trim();
+    if (allowInherit && mode == 'inherit') return 'inherit';
+    if (mode == 'paid') return 'paid';
+    return 'free';
+  }
+
+  String _localizedInspectionDetailsFromMap(Map<String, dynamic> item) {
+    final lang = Localizations.localeOf(context).languageCode;
+    final ar = (item['inspection_details_ar'] ?? '').toString().trim();
+    final en = (item['inspection_details_en'] ?? '').toString().trim();
+    final ur = (item['inspection_details_ur'] ?? '').toString().trim();
+
+    if (lang == 'en') return _firstNonEmptyText([en, ar, ur]);
+    if (lang == 'ur') return _firstNonEmptyText([ur, en, ar]);
+    return _firstNonEmptyText([ar, en, ur]);
+  }
+
+  String _firstNonEmptyText(List<String> values) {
+    for (final value in values) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty) return trimmed;
+    }
+    return '';
+  }
+
+  _InspectionPolicy _categoryInspectionPolicy() {
+    final mode = _normalizeInspectionMode(widget.service.inspectionPricingMode);
+    final fee = mode == 'paid' ? _toDouble(widget.service.inspectionFee) : 0.0;
+    final lang = Localizations.localeOf(context).languageCode;
+    final details = lang == 'en'
+        ? _firstNonEmptyText([
+            widget.service.inspectionDetailsEn ?? '',
+            widget.service.inspectionDetailsAr ?? '',
+            widget.service.inspectionDetailsUr ?? '',
+          ])
+        : lang == 'ur'
+        ? _firstNonEmptyText([
+            widget.service.inspectionDetailsUr ?? '',
+            widget.service.inspectionDetailsEn ?? '',
+            widget.service.inspectionDetailsAr ?? '',
+          ])
+        : _firstNonEmptyText([
+            widget.service.inspectionDetailsAr ?? '',
+            widget.service.inspectionDetailsEn ?? '',
+            widget.service.inspectionDetailsUr ?? '',
+          ]);
+
+    return _InspectionPolicy(
+      mode: fee > 0 ? mode : 'free',
+      fee: fee > 0 ? fee : 0,
+      details: details,
+    );
+  }
+
+  _InspectionPolicy _serviceInspectionPolicy(Map<String, dynamic> item) {
+    final mode = _normalizeInspectionMode(
+      item['inspection_pricing_mode'],
+      allowInherit: true,
+    );
+    final fee = mode == 'paid' ? _toDouble(item['inspection_fee']) : 0.0;
+    return _InspectionPolicy(
+      mode: fee > 0
+          ? mode
+          : mode == 'inherit'
+          ? 'inherit'
+          : 'free',
+      fee: fee > 0 ? fee : 0,
+      details: _localizedInspectionDetailsFromMap(item),
+    );
+  }
+
+  _InspectionPolicy get _effectiveInspectionPolicy {
+    final paidPolicies = <_InspectionPolicy>[];
+    _InspectionPolicy? freeOverride;
+
+    for (final item in _selectedServiceRows) {
+      final policy = _serviceInspectionPolicy(item);
+      if (policy.mode == 'inherit') continue;
+      if (!policy.isFree) {
+        paidPolicies.add(policy);
+      } else {
+        freeOverride ??= policy;
+      }
+    }
+
+    if (paidPolicies.isNotEmpty) {
+      paidPolicies.sort((a, b) => b.fee.compareTo(a.fee));
+      return paidPolicies.first;
+    }
+    if (freeOverride != null) {
+      return freeOverride;
+    }
+    return _categoryInspectionPolicy();
+  }
+
+  Widget _buildInspectionPolicyCard() {
+    final policy = _effectiveInspectionPolicy;
+    final isFree = policy.isFree;
+    final Color accentColor = isFree ? Colors.green : const Color(0xFFC27803);
+    final Color backgroundColor = isFree
+        ? Colors.green.shade50
+        : const Color(0xFFFFF7E6);
+    final Color borderColor = isFree
+        ? Colors.green.shade200
+        : const Color(0xFFF0C36A);
+    final icon = isFree ? Icons.verified_user : Icons.payments_outlined;
+    final titleKey = isFree
+        ? 'service_request_free_inspection_title'
+        : 'service_request_paid_inspection_title';
+    final subtitle = isFree
+        ? context.tr('service_request_free_inspection_subtitle')
+        : (policy.details.isNotEmpty
+              ? policy.details
+              : context.tr('service_request_paid_inspection_default_details'));
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 24),
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: backgroundColor,
+        border: Border.all(color: borderColor),
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: [
+          BoxShadow(
+            color: accentColor.withValues(alpha: 0.1),
+            blurRadius: 8,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: accentColor.withValues(alpha: 0.1),
+              shape: BoxShape.circle,
+            ),
+            child: Icon(icon, color: accentColor, size: 24),
+          ),
+          const SizedBox(width: 16),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  context.tr(titleKey),
+                  style: TextStyle(
+                    color: accentColor,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 16,
+                  ),
+                ),
+                if (!isFree) ...[
+                  const SizedBox(height: 6),
+                  Row(
+                    children: [
+                      Text(
+                        '${context.tr('service_request_inspection_fee_label')}: ',
+                        style: TextStyle(
+                          color: Colors.orange.shade900,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      SaudiRiyalText(
+                        text: policy.fee.toStringAsFixed(2),
+                        iconSize: 13,
+                        style: TextStyle(
+                          color: Colors.orange.shade900,
+                          fontSize: 13,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const SizedBox(height: 4),
+                Text(
+                  subtitle,
+                  style: TextStyle(
+                    color: isFree
+                        ? Colors.green.shade900
+                        : Colors.orange.shade900,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildProblemTypeSelector() {
+    final selectedCount = _selectedProblemTypeTitles.length;
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(16),
+        boxShadow: AppShadows.sm,
+        border: Border.all(color: AppColors.gray100),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.build_circle_outlined, color: AppColors.primary),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  context.tr('service_request_problem_type_hint'),
+                  style: const TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w700,
+                    color: AppColors.gray900,
+                  ),
+                ),
+              ),
+              if (selectedCount > 0)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 4,
+                  ),
+                  decoration: BoxDecoration(
+                    color: AppColors.primary.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(99),
+                  ),
+                  child: Text(
+                    '$selectedCount',
+                    style: const TextStyle(
+                      color: AppColors.primary,
+                      fontSize: 12,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            context.tr('service_request_problem_type_multi_hint'),
+            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+          ),
+          const SizedBox(height: 12),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: _problemTypes.map((item) {
+              final isSelected = _selectedProblemTypes.contains(item.title);
+              return FilterChip(
+                label: Text(item.title, overflow: TextOverflow.ellipsis),
+                selected: isSelected,
+                onSelected: (selected) {
+                  setState(() {
+                    if (selected) {
+                      _selectedProblemTypes.add(item.title);
+                    } else {
+                      _selectedProblemTypes.remove(item.title);
+                    }
+                  });
+                },
+                showCheckmark: true,
+                checkmarkColor: AppColors.primary,
+                selectedColor: AppColors.primary.withValues(alpha: 0.12),
+                backgroundColor: const Color(0xFFF8FAFC),
+                side: BorderSide(
+                  color: isSelected ? AppColors.primary : AppColors.gray200,
+                ),
+                labelStyle: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: isSelected ? AppColors.primary : AppColors.gray900,
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -1431,72 +1795,7 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.stretch,
                   children: [
-                    // 2. The "Free Inspection" Promise (Trust Builder)
-                    Container(
-                      padding: const EdgeInsets.all(16),
-                      decoration: BoxDecoration(
-                        gradient: LinearGradient(
-                          colors: [Colors.green.shade50, Colors.white],
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                        ),
-                        border: Border.all(color: Colors.green.shade200),
-                        borderRadius: BorderRadius.circular(16),
-                        boxShadow: [
-                          BoxShadow(
-                            color: Colors.green.withValues(alpha: 0.1),
-                            blurRadius: 8,
-                            offset: const Offset(0, 4),
-                          ),
-                        ],
-                      ),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(10),
-                            decoration: BoxDecoration(
-                              color: Colors.green.withValues(alpha: 0.1),
-                              shape: BoxShape.circle,
-                            ),
-                            child: const Icon(
-                              Icons.verified_user,
-                              color: Colors.green,
-                              size: 24,
-                            ),
-                          ),
-                          const SizedBox(width: 16),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  context.tr(
-                                    'service_request_free_inspection_title',
-                                  ),
-                                  style: const TextStyle(
-                                    color: Colors.green,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 16,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  context.tr(
-                                    'service_request_free_inspection_subtitle',
-                                  ),
-                                  style: TextStyle(
-                                    color: Colors.green.shade900,
-                                    fontSize: 12,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-
-                    const SizedBox(height: 24),
+                    _buildInspectionPolicyCard(),
 
                     _buildSelectedServicesCard(),
 
@@ -1514,64 +1813,7 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
                     ),
                     const SizedBox(height: 12),
 
-                    // Problem Type Dropdown
-                    Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: AppShadows.sm,
-                      ),
-                      child: DropdownButtonFormField<String>(
-                        initialValue: _selectedProblemType,
-                        isExpanded: true,
-                        decoration: InputDecoration(
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 16,
-                            vertical: 12,
-                          ),
-                          border: InputBorder.none,
-                          hintText: context.tr(
-                            'service_request_problem_type_hint',
-                          ),
-                          hintStyle: TextStyle(
-                            color: Colors.grey.shade400,
-                            fontSize: 13,
-                          ),
-                          prefixIcon: const Icon(
-                            Icons.build_circle_outlined,
-                            color: AppColors.primary,
-                          ),
-                        ),
-                        selectedItemBuilder: (context) {
-                          return _problemTypes
-                              .map(
-                                (item) => Align(
-                                  alignment: AlignmentDirectional.centerStart,
-                                  child: Text(
-                                    item.title,
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                              )
-                              .toList();
-                        },
-                        items: _problemTypes
-                            .map(
-                              (item) => DropdownMenuItem(
-                                value: item.title,
-                                child: Text(
-                                  item.title,
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (v) =>
-                            setState(() => _selectedProblemType = v),
-                      ),
-                    ),
+                    _buildProblemTypeSelector(),
 
                     const SizedBox(height: 16),
 
@@ -2039,8 +2281,18 @@ class _ServiceRequestScreenState extends State<ServiceRequestScreen> {
                           activeColor: AppColors.primary,
                         ),
                         Expanded(
-                          child: Text(
-                            context.tr('service_request_agree_terms'),
+                          child: InkWell(
+                            onTap: _openTermsPage,
+                            child: Padding(
+                              padding: const EdgeInsets.symmetric(vertical: 8),
+                              child: Text(
+                                context.tr('service_request_agree_terms'),
+                                style: const TextStyle(
+                                  color: AppColors.gray700,
+                                  decoration: TextDecoration.underline,
+                                ),
+                              ),
+                            ),
                           ),
                         ),
                       ],

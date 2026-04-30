@@ -8,9 +8,11 @@ require_once '../init.php';
 requireLogin();
 require_once '../includes/store_accounting.php';
 require_once '../includes/special_services.php';
+require_once '../includes/provider_finance.php';
 
 ensureStoreSparePartsAccountingSchema();
 ensureSpecialServicesSchema();
+providerFinanceEnsureSchema();
 
 $pageTitle = 'التقارير المالية';
 $pageSubtitle = 'سجل موحد وتقارير مالية مع فلاتر وطباعة';
@@ -26,7 +28,7 @@ if (!in_array($entityFilter, $allowedEntities, true)) {
     $entityFilter = 'all';
 }
 
-$transactionTypes = ['deposit', 'withdrawal', 'payment', 'commission', 'refund', 'reward', 'referral_bonus'];
+$transactionTypes = ['deposit', 'withdrawal', 'payment', 'commission', 'refund', 'reward', 'referral_bonus', 'earning', 'transfer', 'deduction', 'adjustment'];
 $storeEntryTypes = ['credit', 'debit'];
 $allowedTypes = array_merge($transactionTypes, $storeEntryTypes);
 if (!in_array($typeFilter, $allowedTypes, true)) {
@@ -235,6 +237,10 @@ $typeLabels = [
     'refund' => 'استرجاع',
     'reward' => 'مكافأة',
     'referral_bonus' => 'مكافأة إحالة',
+    'earning' => 'مستحق مقدم خدمة',
+    'transfer' => 'تحويل أموال',
+    'deduction' => 'خصم',
+    'adjustment' => 'تسوية',
     'credit' => 'له',
     'debit' => 'عليه'
 ];
@@ -252,6 +258,10 @@ $transactionTypeBadges = [
     'refund' => ['text' => 'استرجاع', 'class' => 'primary'],
     'reward' => ['text' => 'مكافأة', 'class' => 'secondary'],
     'referral_bonus' => ['text' => 'مكافأة إحالة', 'class' => 'secondary'],
+    'earning' => ['text' => 'مستحق', 'class' => 'success'],
+    'transfer' => ['text' => 'تحويل', 'class' => 'primary'],
+    'deduction' => ['text' => 'خصم', 'class' => 'danger'],
+    'adjustment' => ['text' => 'تسوية', 'class' => 'secondary'],
     'credit' => ['text' => 'له', 'class' => 'success'],
     'debit' => ['text' => 'عليه', 'class' => 'danger']
 ];
@@ -465,7 +475,16 @@ include '../includes/header.php';
                                     </span>
                                 </td>
                                 <td style="font-weight: bold; direction: ltr;">
-                                    <?php echo number_format((float) $row['amount'], 2); ?> ⃁
+                                    <?php
+                                        $displayAmount = (float) $row['amount'];
+                                        if (($row['source_table'] ?? '') === 'transaction' && !empty($row['provider_id'])) {
+                                            $displayAmount = providerFinanceSignedAmount([
+                                                'type' => $row['action_type'] ?? '',
+                                                'amount' => $row['amount'] ?? 0,
+                                            ]);
+                                        }
+                                    ?>
+                                    <?php echo ($displayAmount > 0 ? '+' : '') . number_format($displayAmount, 2); ?> ⃁
                                 </td>
                                 <td>
                                     <?php echo $row['balance_after'] ? number_format((float) $row['balance_after'], 2) : '-'; ?>
@@ -498,7 +517,7 @@ include '../includes/header.php';
                                 <td>
                                     <?php if (!empty($row['status'])): ?>
                                         <span class="badge <?php echo $row['status'] === 'completed' ? 'badge-success' : 'badge-warning'; ?>">
-                                            <?php echo htmlspecialchars((string) $row['status'], ENT_QUOTES, 'UTF-8'); ?>
+                                            <?php echo providerFinanceTransactionStatusLabel((string) $row['status']); ?>
                                         </span>
                                     <?php else: ?>
                                         -

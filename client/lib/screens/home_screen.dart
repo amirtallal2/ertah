@@ -1,6 +1,7 @@
 // Home Screen
 // الشاشة الرئيسية
 
+import 'package:flutter/services.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:cached_network_image/cached_network_image.dart';
@@ -18,7 +19,7 @@ import '../providers/location_provider.dart';
 import '../utils/saudi_riyal_icon.dart';
 import '../widgets/app_logo.dart';
 import 'location_picker_screen.dart';
-import 'best_offers_screen.dart';
+import 'offers_screen.dart';
 import 'service_selection_screen.dart';
 import 'service_request_screen.dart';
 import 'all_spares_screen.dart';
@@ -492,6 +493,12 @@ class _HomeScreenState extends State<HomeScreen> {
     return int.tryParse(value?.toString() ?? '');
   }
 
+  double _toDouble(dynamic value) {
+    if (value is double) return value;
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0;
+  }
+
   String _normalizeLink(dynamic value) {
     final link = value?.toString().trim() ?? '';
     if (link.isEmpty || link.toLowerCase() == 'null') {
@@ -746,6 +753,12 @@ class _HomeScreenState extends State<HomeScreen> {
           .toString(),
       image: (item['category_image'] ?? item['image'] ?? '').toString(),
       specialModule: item['category_special_module']?.toString(),
+      inspectionPricingMode:
+          (item['category_inspection_pricing_mode'] ?? 'free').toString(),
+      inspectionFee: _toDouble(item['category_inspection_fee']),
+      inspectionDetailsAr: item['category_inspection_details_ar']?.toString(),
+      inspectionDetailsEn: item['category_inspection_details_en']?.toString(),
+      inspectionDetailsUr: item['category_inspection_details_ur']?.toString(),
       createdAt: DateTime.now(),
     );
 
@@ -755,6 +768,9 @@ class _HomeScreenState extends State<HomeScreen> {
         builder: (_) => ServiceRequestScreen(
           service: category,
           subServices: serviceId > 0 ? <int>[serviceId] : const <int>[],
+          selectedServices: serviceId > 0
+              ? <Map<String, dynamic>>[Map<String, dynamic>.from(item)]
+              : const <Map<String, dynamic>>[],
         ),
       ),
     );
@@ -770,6 +786,28 @@ class _HomeScreenState extends State<HomeScreen> {
         ),
       ),
     );
+  }
+
+  void _openOffersScreen() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (context) => const OffersScreen()),
+    );
+  }
+
+  Future<void> _copyPromoCode(String promoCode) async {
+    if (promoCode.trim().isEmpty) return;
+    await Clipboard.setData(ClipboardData(text: promoCode.trim()));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(context.tr('promo_code_copied')),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(milliseconds: 1400),
+        ),
+      );
   }
 
   void _handleOfferTap(Map<String, dynamic> offer) {
@@ -817,7 +855,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => const BestOffersScreen()),
+      MaterialPageRoute(builder: (context) => const OffersScreen()),
     );
   }
 
@@ -866,10 +904,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
     if (linkType == 'offers' || linkType == 'offer') {
       if (!mounted) return;
-      Navigator.push(
-        context,
-        MaterialPageRoute(builder: (context) => const BestOffersScreen()),
-      );
+      _openOffersScreen();
       return;
     }
 
@@ -1569,11 +1604,20 @@ class _HomeScreenState extends State<HomeScreen> {
                                   );
                                 }
 
-                                // 3. Fallback: Icon as Emoji/Text (or Default)
-                                return Center(
-                                  child: Text(
-                                    icon ?? '🔧',
-                                    style: const TextStyle(fontSize: 30),
+                                if (icon != null && icon.trim().isNotEmpty) {
+                                  return Center(
+                                    child: Text(
+                                      icon,
+                                      style: const TextStyle(fontSize: 30),
+                                    ),
+                                  );
+                                }
+
+                                return const Center(
+                                  child: Icon(
+                                    Icons.category_outlined,
+                                    color: AppColors.primary,
+                                    size: 30,
                                   ),
                                 );
                               },
@@ -1769,7 +1813,8 @@ class _HomeScreenState extends State<HomeScreen> {
                         crossAxisAlignment: CrossAxisAlignment.end,
                         children: [
                           SaudiRiyalText(
-                            text: '${context.tr('from')} ${service['price']}',
+                            text:
+                                '${context.tr('starts_from')} ${service['price']}',
                             style: const TextStyle(
                               fontSize: 13,
                               color: Color(0xFF7466ED),
@@ -2219,14 +2264,7 @@ class _HomeScreenState extends State<HomeScreen> {
               ],
             ),
             TextButton(
-              onPressed: () {
-                Navigator.push(
-                  context,
-                  MaterialPageRoute(
-                    builder: (context) => const BestOffersScreen(),
-                  ),
-                );
-              },
+              onPressed: _openOffersScreen,
               style: TextButton.styleFrom(
                 foregroundColor: const Color(0xFF7466ED),
                 padding: EdgeInsets.zero,
@@ -2253,98 +2291,218 @@ class _HomeScreenState extends State<HomeScreen> {
                     offer.map((key, value) => MapEntry(key.toString(), value)),
                   )
                 : <String, dynamic>{};
+            final promoCode = (offerMap['promo_code'] ?? offerMap['code'] ?? '')
+                .toString()
+                .trim()
+                .toUpperCase();
+            final minOrderAmount = _toDouble(offerMap['min_order_amount']);
+            final endDate = (offerMap['end_date'] ?? '').toString().trim();
 
             return InkWell(
               borderRadius: BorderRadius.circular(16),
               onTap: () => _handleOfferTap(offerMap),
               child: Container(
-                height: 100,
                 decoration: BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(16),
                   boxShadow: AppShadows.sm,
                 ),
-                child: Row(
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    ClipRRect(
-                      borderRadius: const BorderRadius.only(
-                        topRight: Radius.circular(16),
-                        bottomRight: Radius.circular(16),
-                      ),
-                      child: offerMap['image'] != null
-                          ? CachedNetworkImage(
-                              imageUrl: AppConfig.fixMediaUrl(
-                                offerMap['image'],
-                              ),
-                              width: 100,
-                              height: 100,
-                              fit: BoxFit.cover,
-                            )
-                          : Container(
-                              width: 100,
-                              height: 100,
-                              color: Colors.grey[200],
-                              child: const Icon(Icons.local_offer),
+                    Stack(
+                      children: [
+                        SizedBox(
+                          height: 120,
+                          width: double.infinity,
+                          child: offerMap['image'] != null
+                              ? CachedNetworkImage(
+                                  imageUrl: AppConfig.fixMediaUrl(
+                                    offerMap['image'],
+                                  ),
+                                  fit: BoxFit.cover,
+                                )
+                              : Container(
+                                  color: Colors.grey[200],
+                                  alignment: Alignment.center,
+                                  child: const Icon(Icons.local_offer),
+                                ),
+                        ),
+                        Positioned(
+                          top: 10,
+                          right: 10,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 10,
+                              vertical: 5,
                             ),
-                    ),
-                    Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.all(12),
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Text(
-                              _getLoc(offerMap, 'title'),
-                              style: const TextStyle(
-                                fontWeight: FontWeight.bold,
-                                fontSize: 14,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
+                            decoration: BoxDecoration(
+                              color: Colors.red,
+                              borderRadius: BorderRadius.circular(999),
                             ),
-                            const SizedBox(height: 4),
-                            Text(
-                              _getLoc(offerMap, 'description'),
-                              style: TextStyle(
-                                color: AppColors.gray500,
-                                fontSize: 11,
-                              ),
-                              maxLines: 2,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 8),
-                            Container(
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              decoration: BoxDecoration(
-                                color: Colors.red[50],
-                                borderRadius: BorderRadius.circular(8),
-                              ),
-                              child: offerMap['discount_type'] == 'percentage'
-                                  ? Text(
-                                      '${context.tr('discount')} ${offerMap['discount_value']}%',
-                                      style: const TextStyle(
-                                        color: Colors.red,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                    )
-                                  : SaudiRiyalText(
-                                      text:
-                                          '${context.tr('discount')} ${offerMap['discount_value']}',
-                                      style: const TextStyle(
-                                        color: Colors.red,
-                                        fontSize: 10,
-                                        fontWeight: FontWeight.bold,
-                                      ),
-                                      iconSize: 10,
+                            child: offerMap['discount_type'] == 'percentage'
+                                ? Text(
+                                    '${context.tr('discount')} ${offerMap['discount_value']}%',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
                                     ),
+                                  )
+                                : SaudiRiyalText(
+                                    text:
+                                        '${context.tr('discount')} ${offerMap['discount_value']}',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    iconSize: 11,
+                                  ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _getLoc(offerMap, 'title'),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              fontSize: 14,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            _getLoc(offerMap, 'description'),
+                            style: const TextStyle(
+                              color: AppColors.gray500,
+                              fontSize: 11,
+                              height: 1.4,
+                            ),
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 10),
+                          Wrap(
+                            spacing: 8,
+                            runSpacing: 8,
+                            children: [
+                              if (endDate.isNotEmpty)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFF9FAFB),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
+                                      color: AppColors.gray200,
+                                    ),
+                                  ),
+                                  child: Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      const Icon(
+                                        Icons.access_time_rounded,
+                                        size: 14,
+                                        color: AppColors.gray500,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        '${context.tr('valid_until')} $endDate',
+                                        style: const TextStyle(
+                                          fontSize: 11,
+                                          fontWeight: FontWeight.w600,
+                                          color: AppColors.gray700,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              if (minOrderAmount > 0)
+                                Container(
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 10,
+                                    vertical: 6,
+                                  ),
+                                  decoration: BoxDecoration(
+                                    color: const Color(0xFFEEF6FF),
+                                    borderRadius: BorderRadius.circular(999),
+                                    border: Border.all(
+                                      color: const Color(0xFFD7E6FF),
+                                    ),
+                                  ),
+                                  child: SaudiRiyalText(
+                                    text:
+                                        '${context.tr('minimum_order_amount')}: ${minOrderAmount.toStringAsFixed(0)}',
+                                    style: const TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w700,
+                                      color: AppColors.gray800,
+                                    ),
+                                    iconSize: 11,
+                                  ),
+                                ),
+                            ],
+                          ),
+                          if (promoCode.isNotEmpty) ...[
+                            const SizedBox(height: 10),
+                            InkWell(
+                              onTap: () => _copyPromoCode(promoCode),
+                              borderRadius: BorderRadius.circular(12),
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(
+                                  horizontal: 10,
+                                  vertical: 9,
+                                ),
+                                decoration: BoxDecoration(
+                                  color: const Color(0xFFF4F3FF),
+                                  borderRadius: BorderRadius.circular(12),
+                                  border: Border.all(
+                                    color: const Color(0xFFD9D6FF),
+                                  ),
+                                ),
+                                child: Row(
+                                  children: [
+                                    const Icon(
+                                      Icons.copy_rounded,
+                                      size: 16,
+                                      color: Color(0xFF7466ED),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        promoCode,
+                                        style: const TextStyle(
+                                          fontSize: 12,
+                                          fontWeight: FontWeight.w800,
+                                          color: Color(0xFF4A3FB0),
+                                          letterSpacing: 0.6,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      context.tr('apply_discount_code'),
+                                      style: const TextStyle(
+                                        fontSize: 11,
+                                        fontWeight: FontWeight.w700,
+                                        color: Color(0xFF7466ED),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
                             ),
                           ],
-                        ),
+                        ],
                       ),
                     ),
                   ],

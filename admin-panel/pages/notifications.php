@@ -15,21 +15,33 @@ if (!hasPermission('notifications') && ($admin['role'] ?? '') !== 'super_admin')
 $pageTitle = 'إدارة الإشعارات';
 $pageSubtitle = 'التحكم في إعدادات الإشعارات وإرسالها للمستخدمين';
 
-function notificationsTableExistsByName(string $table): bool
+function notificationsSafeName(string $value): string
+{
+    return preg_replace('/[^a-zA-Z0-9_]/', '', $value);
+}
+
+function notificationsTableExistsByName(string $table, bool $forceRefresh = false): bool
 {
     static $cache = [];
-    if (isset($cache[$table])) {
-        return $cache[$table];
+    $safeTable = notificationsSafeName($table);
+    if ($safeTable === '') {
+        return false;
+    }
+
+    if (!$forceRefresh && array_key_exists($safeTable, $cache)) {
+        return (bool) $cache[$safeTable];
     }
 
     try {
-        $row = db()->fetch("SHOW TABLES LIKE ?", [$table]);
-        $cache[$table] = !empty($row);
+        $row = db()->fetch(
+            "SHOW TABLES LIKE " . db()->getConnection()->quote($safeTable)
+        );
+        $cache[$safeTable] = !empty($row);
     } catch (Throwable $e) {
-        $cache[$table] = false;
+        $cache[$safeTable] = false;
     }
 
-    return $cache[$table];
+    return (bool) $cache[$safeTable];
 }
 
 function notificationsColumnExists(string $table, string $column, bool $forceRefresh = false): bool
@@ -40,14 +52,22 @@ function notificationsColumnExists(string $table, string $column, bool $forceRef
         return $cache[$key];
     }
 
-    if (!notificationsTableExistsByName($table)) {
+    $safeTable = notificationsSafeName($table);
+    $safeColumn = notificationsSafeName($column);
+    if ($safeTable === '' || $safeColumn === '') {
+        $cache[$key] = false;
+        return false;
+    }
+
+    if (!notificationsTableExistsByName($safeTable, $forceRefresh)) {
         $cache[$key] = false;
         return false;
     }
 
     try {
-        $safeColumn = preg_replace('/[^a-zA-Z0-9_]/', '', $column);
-        $row = db()->fetch("SHOW COLUMNS FROM `{$table}` LIKE '{$safeColumn}'");
+        $row = db()->fetch(
+            "SHOW COLUMNS FROM `{$safeTable}` LIKE " . db()->getConnection()->quote($safeColumn)
+        );
         $cache[$key] = !empty($row);
     } catch (Throwable $e) {
         $cache[$key] = false;
@@ -64,14 +84,22 @@ function notificationsIndexExists(string $table, string $indexName, bool $forceR
         return $cache[$key];
     }
 
-    if (!notificationsTableExistsByName($table)) {
+    $safeTable = notificationsSafeName($table);
+    $safeIndex = notificationsSafeName($indexName);
+    if ($safeTable === '' || $safeIndex === '') {
+        $cache[$key] = false;
+        return false;
+    }
+
+    if (!notificationsTableExistsByName($safeTable, $forceRefresh)) {
         $cache[$key] = false;
         return false;
     }
 
     try {
-        $safeIndex = preg_replace('/[^a-zA-Z0-9_]/', '', $indexName);
-        $row = db()->fetch("SHOW INDEX FROM `{$table}` WHERE Key_name = '{$safeIndex}'");
+        $row = db()->fetch(
+            "SHOW INDEX FROM `{$safeTable}` WHERE Key_name = " . db()->getConnection()->quote($safeIndex)
+        );
         $cache[$key] = !empty($row);
     } catch (Throwable $e) {
         $cache[$key] = false;
@@ -82,22 +110,51 @@ function notificationsIndexExists(string $table, string $indexName, bool $forceR
 
 function notificationsEnsureColumn(string $table, string $column, string $definition): void
 {
-    if (!notificationsTableExistsByName($table)) {
+    $safeTable = notificationsSafeName($table);
+    $safeColumn = notificationsSafeName($column);
+    if ($safeTable === '' || $safeColumn === '' || !notificationsTableExistsByName($safeTable)) {
         return;
     }
 
-    $safeColumn = preg_replace('/[^a-zA-Z0-9_]/', '', $column);
-    if ($safeColumn === '') {
+    if (notificationsColumnExists($safeTable, $safeColumn, true)) {
         return;
     }
 
     try {
-        if (!notificationsColumnExists($table, $safeColumn, true)) {
-            db()->query("ALTER TABLE `{$table}` ADD COLUMN `{$safeColumn}` {$definition}");
-        } else {
-            // Best-effort: relax column to a safe definition (allow NULL + defaults)
-            db()->query("ALTER TABLE `{$table}` MODIFY COLUMN `{$safeColumn}` {$definition}");
+        db()->query("ALTER TABLE `{$safeTable}` ADD COLUMN `{$safeColumn}` {$definition}");
+        notificationsColumnExists($safeTable, $safeColumn, true);
+    } catch (Throwable $e) {
+        // Ignore schema hardening issues to avoid blocking the page.
+    }
+}
+
+function notificationsEnsureIndex(string $table, string $indexName, array $columns): void
+{
+    $safeTable = notificationsSafeName($table);
+    $safeIndex = notificationsSafeName($indexName);
+    if ($safeTable === '' || $safeIndex === '' || !notificationsTableExistsByName($safeTable)) {
+        return;
+    }
+
+    if (notificationsIndexExists($safeTable, $safeIndex, true)) {
+        return;
+    }
+
+    $safeColumns = [];
+    foreach ($columns as $column) {
+        $safeColumn = notificationsSafeName((string) $column);
+        if ($safeColumn !== '' && notificationsColumnExists($safeTable, $safeColumn, true)) {
+            $safeColumns[] = "`{$safeColumn}`";
         }
+    }
+
+    if (empty($safeColumns)) {
+        return;
+    }
+
+    try {
+        db()->query("ALTER TABLE `{$safeTable}` ADD INDEX `{$safeIndex}` (" . implode(', ', $safeColumns) . ")");
+        notificationsIndexExists($safeTable, $safeIndex, true);
     } catch (Throwable $e) {
         // Ignore schema hardening issues to avoid blocking the page.
     }
@@ -127,6 +184,7 @@ function notificationsEnsureDeliverySchema(): void
                 INDEX `idx_notifications_provider` (`provider_id`),
                 INDEX `idx_notifications_created` (`created_at`)
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+            notificationsTableExistsByName('notifications', true);
         } catch (Throwable $e) {
             return;
         }
@@ -148,12 +206,9 @@ function notificationsEnsureDeliverySchema(): void
         if (!notificationsColumnExists('notifications', 'data', true)) {
             db()->query("ALTER TABLE `notifications` ADD COLUMN `data` LONGTEXT NULL");
         }
-        if (
-            notificationsColumnExists('notifications', 'provider_id', true)
-            && !notificationsIndexExists('notifications', 'idx_notifications_provider', true)
-        ) {
-            db()->query("ALTER TABLE `notifications` ADD INDEX `idx_notifications_provider` (`provider_id`)");
-        }
+        notificationsEnsureIndex('notifications', 'idx_notifications_user', ['user_id']);
+        notificationsEnsureIndex('notifications', 'idx_notifications_provider', ['provider_id']);
+        notificationsEnsureIndex('notifications', 'idx_notifications_created', ['created_at']);
     } catch (Throwable $e) {
         // Ignore schema hardening issues to avoid blocking the page.
     }
@@ -169,11 +224,308 @@ function notificationsGetSettingFromDb(string $key): string
     return trim((string) ($row['setting_value'] ?? ''));
 }
 
+function notificationsGetSettingFromDbAny(array $keys): array
+{
+    foreach ($keys as $key) {
+        $normalizedKey = trim((string) $key);
+        if ($normalizedKey === '') {
+            continue;
+        }
+
+        $value = notificationsGetSettingFromDb($normalizedKey);
+        if ($value !== '') {
+            return [$value, $normalizedKey];
+        }
+    }
+
+    return ['', ''];
+}
+
+function notificationsNormalizeOneSignalRestApiKey(string $raw): string
+{
+    $value = trim($raw);
+    if ($value === '') {
+        return '';
+    }
+
+    $value = trim($value, " \t\n\r\0\x0B\"'");
+    $value = preg_replace('/^authorization\s*:\s*/i', '', $value);
+    $value = preg_replace('/^(key|basic|bearer)\s+/i', '', trim((string) $value));
+    return trim((string) $value, " \t\n\r\0\x0B\"'");
+}
+
+function notificationsAppendCandidate(array &$candidates, string $value, string $source, bool $isRestKey = false): void
+{
+    $value = trim($value);
+    if ($isRestKey) {
+        $value = notificationsNormalizeOneSignalRestApiKey($value);
+    }
+    if ($value === '') {
+        return;
+    }
+
+    foreach ($candidates as $candidate) {
+        if (($candidate['value'] ?? '') === $value) {
+            return;
+        }
+    }
+
+    $candidates[] = [
+        'value' => $value,
+        'source' => $source,
+    ];
+}
+
+function notificationsOneSignalAppIdCandidates(): array
+{
+    $candidates = [];
+    notificationsAppendCandidate(
+        $candidates,
+        notificationsGetSettingFromDb('onesignal_app_id'),
+        'app_settings:onesignal_app_id'
+    );
+    notificationsAppendCandidate(
+        $candidates,
+        notificationsGetSettingFromDb('one_signal_app_id'),
+        'app_settings:one_signal_app_id'
+    );
+    notificationsAppendCandidate(
+        $candidates,
+        (string) (getenv('ONESIGNAL_APP_ID') ?: ''),
+        'ENV:ONESIGNAL_APP_ID'
+    );
+    notificationsAppendCandidate(
+        $candidates,
+        (string) (getenv('ONE_SIGNAL_APP_ID') ?: ''),
+        'ENV:ONE_SIGNAL_APP_ID'
+    );
+    notificationsAppendCandidate(
+        $candidates,
+        (string) (defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : ''),
+        'config:ONESIGNAL_APP_ID'
+    );
+
+    return $candidates;
+}
+
+function notificationsOneSignalRestApiKeyCandidates(): array
+{
+    $candidates = [];
+    notificationsAppendCandidate(
+        $candidates,
+        notificationsGetSettingFromDb('onesignal_rest_api_key'),
+        'app_settings:onesignal_rest_api_key',
+        true
+    );
+    notificationsAppendCandidate(
+        $candidates,
+        notificationsGetSettingFromDb('one_signal_rest_api_key'),
+        'app_settings:one_signal_rest_api_key',
+        true
+    );
+    notificationsAppendCandidate(
+        $candidates,
+        (string) (getenv('ONESIGNAL_REST_API_KEY') ?: ''),
+        'ENV:ONESIGNAL_REST_API_KEY',
+        true
+    );
+    notificationsAppendCandidate(
+        $candidates,
+        (string) (getenv('ONE_SIGNAL_REST_API_KEY') ?: ''),
+        'ENV:ONE_SIGNAL_REST_API_KEY',
+        true
+    );
+    notificationsAppendCandidate(
+        $candidates,
+        (string) (defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : ''),
+        'config:ONESIGNAL_REST_API_KEY',
+        true
+    );
+
+    return $candidates;
+}
+
+function notificationsOneSignalCredentialCandidates(): array
+{
+    $credentials = [];
+    $seen = [];
+
+    $appendCredential = static function (
+        string $appId,
+        string $apiKey,
+        string $source
+    ) use (&$credentials, &$seen): void {
+        $appId = trim($appId);
+        $apiKey = notificationsNormalizeOneSignalRestApiKey($apiKey);
+        if ($appId === '' || $apiKey === '') {
+            return;
+        }
+
+        $fingerprint = $appId . '|' . $apiKey;
+        if (isset($seen[$fingerprint])) {
+            return;
+        }
+        $seen[$fingerprint] = true;
+        $credentials[] = [
+            'app_id' => $appId,
+            'api_key' => $apiKey,
+            'source' => $source,
+        ];
+    };
+
+    $dbAppId = notificationsGetSettingFromDb('onesignal_app_id');
+    $dbLegacyAppId = notificationsGetSettingFromDb('one_signal_app_id');
+    $dbRestKey = notificationsGetSettingFromDb('onesignal_rest_api_key');
+    $dbLegacyRestKey = notificationsGetSettingFromDb('one_signal_rest_api_key');
+    $envAppId = (string) (getenv('ONESIGNAL_APP_ID') ?: '');
+    $envLegacyAppId = (string) (getenv('ONE_SIGNAL_APP_ID') ?: '');
+    $envRestKey = (string) (getenv('ONESIGNAL_REST_API_KEY') ?: '');
+    $envLegacyRestKey = (string) (getenv('ONE_SIGNAL_REST_API_KEY') ?: '');
+    $configAppId = (string) (defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : '');
+    $configRestKey = (string) (defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : '');
+
+    $appendCredential($dbAppId, $dbRestKey, 'app_settings:onesignal_app_id + app_settings:onesignal_rest_api_key');
+    $appendCredential($dbLegacyAppId, $dbLegacyRestKey, 'app_settings:one_signal_app_id + app_settings:one_signal_rest_api_key');
+    $appendCredential($dbAppId, $dbLegacyRestKey, 'app_settings:onesignal_app_id + app_settings:one_signal_rest_api_key');
+    $appendCredential($dbLegacyAppId, $dbRestKey, 'app_settings:one_signal_app_id + app_settings:onesignal_rest_api_key');
+    $appendCredential($envAppId, $envRestKey, 'ENV:ONESIGNAL_APP_ID + ENV:ONESIGNAL_REST_API_KEY');
+    $appendCredential($envLegacyAppId, $envLegacyRestKey, 'ENV:ONE_SIGNAL_APP_ID + ENV:ONE_SIGNAL_REST_API_KEY');
+    $appendCredential($configAppId, $configRestKey, 'config:ONESIGNAL_APP_ID + config:ONESIGNAL_REST_API_KEY');
+
+    foreach (notificationsOneSignalAppIdCandidates() as $appCandidate) {
+        foreach (notificationsOneSignalRestApiKeyCandidates() as $keyCandidate) {
+            $appendCredential(
+                (string) ($appCandidate['value'] ?? ''),
+                (string) ($keyCandidate['value'] ?? ''),
+                (string) ($appCandidate['source'] ?? 'App ID') . ' + ' . (string) ($keyCandidate['source'] ?? 'REST API Key')
+            );
+        }
+    }
+
+    return $credentials;
+}
+
+function notificationsApiKeyFingerprint(string $apiKey): string
+{
+    $apiKey = notificationsNormalizeOneSignalRestApiKey($apiKey);
+    if ($apiKey === '') {
+        return 'empty';
+    }
+
+    return 'len=' . strlen($apiKey) . ', last4=' . substr($apiKey, -4);
+}
+
+function notificationsIsOneSignalAuthError(int $statusCode, string $responseText): bool
+{
+    if ($statusCode === 401 || $statusCode === 403) {
+        return true;
+    }
+
+    $lower = strtolower($responseText);
+    return strpos($lower, 'access denied') !== false
+        || strpos($lower, 'authorization') !== false
+        || strpos($lower, 'valid api key') !== false;
+}
+
+function notificationsIsOneSignalCredentialError(int $statusCode, string $responseText): bool
+{
+    if (notificationsIsOneSignalAuthError($statusCode, $responseText)) {
+        return true;
+    }
+
+    $lower = strtolower($responseText);
+    return strpos($lower, 'failed to parse app_id') !== false
+        || strpos($lower, 'app_id is present but malformed') !== false
+        || (strpos($lower, 'app id') !== false && strpos($lower, 'not found') !== false)
+        || (strpos($lower, 'app_id') !== false && strpos($lower, 'not found') !== false);
+}
+
+function notificationsPostOneSignalPayload(array $payload, array $credentialCandidates): array
+{
+    $credentialErrors = [];
+    foreach ($credentialCandidates as $credential) {
+        $candidatePayload = $payload;
+        $candidatePayload['app_id'] = $credential['app_id'];
+
+        $jsonPayload = json_encode($candidatePayload, JSON_UNESCAPED_UNICODE);
+        if ($jsonPayload === false) {
+            return [
+                'ok' => false,
+                'auth_error' => false,
+                'error' => 'فشل ترميز JSON لطلب OneSignal.',
+            ];
+        }
+
+        $ch = curl_init('https://api.onesignal.com/notifications');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json; charset=utf-8',
+                'Authorization: Key ' . notificationsNormalizeOneSignalRestApiKey($credential['api_key']),
+            ],
+            CURLOPT_POSTFIELDS => $jsonPayload,
+            CURLOPT_TIMEOUT => 20,
+            CURLOPT_CONNECTTIMEOUT => 6,
+        ]);
+
+        $response = curl_exec($ch);
+        $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($response !== false && $statusCode >= 200 && $statusCode < 300) {
+            return [
+                'ok' => true,
+                'source' => (string) ($credential['source'] ?? ''),
+            ];
+        }
+
+        $errorDetails = $curlError !== '' ? $curlError : trim((string) $response);
+        if ($errorDetails === '') {
+            $errorDetails = 'HTTP ' . $statusCode;
+        }
+
+        $safeSource = (string) ($credential['source'] ?? 'unknown');
+        $safeFingerprint = notificationsApiKeyFingerprint((string) ($credential['api_key'] ?? ''));
+        $formattedError = "OneSignal auth/source {$safeSource} ({$safeFingerprint}): {$errorDetails}";
+
+        if (notificationsIsOneSignalCredentialError($statusCode, $errorDetails)) {
+            $credentialErrors[] = $formattedError;
+            continue;
+        }
+
+        return [
+            'ok' => false,
+            'auth_error' => false,
+            'error' => $formattedError,
+        ];
+    }
+
+    return [
+        'ok' => false,
+        'auth_error' => true,
+        'error' => !empty($credentialErrors)
+            ? 'لم يقبل OneSignal أي مصدر من مصادر OneSignal المتاحة. ' . implode(' | ', $credentialErrors)
+            : 'لم يقبل OneSignal أي مصدر من مصادر OneSignal المتاحة.',
+    ];
+}
+
 function notificationsGetSettingWithSource(string $key, string $default = ''): array
 {
-    $dbValue = notificationsGetSettingFromDb($key);
+    $dbKeys = [$key];
+    if ($key === 'onesignal_app_id') {
+        $dbKeys[] = 'one_signal_app_id';
+    } elseif ($key === 'onesignal_rest_api_key') {
+        $dbKeys[] = 'one_signal_rest_api_key';
+    }
+
+    [$dbValue, $dbSourceKey] = notificationsGetSettingFromDbAny($dbKeys);
     if ($dbValue !== '') {
-        return [$dbValue, 'قاعدة البيانات (app_settings)'];
+        if ($key === 'onesignal_rest_api_key') {
+            $dbValue = notificationsNormalizeOneSignalRestApiKey($dbValue);
+        }
+        return [$dbValue, 'قاعدة البيانات (app_settings: ' . $dbSourceKey . ')'];
     }
 
     if ($key === 'onesignal_app_id') {
@@ -191,12 +543,12 @@ function notificationsGetSettingWithSource(string $key, string $default = ''): a
     if ($key === 'onesignal_rest_api_key') {
         $envValue = trim((string) (getenv('ONESIGNAL_REST_API_KEY') ?: getenv('ONE_SIGNAL_REST_API_KEY') ?: ''));
         if ($envValue !== '') {
-            return [$envValue, 'متغيرات البيئة (ENV)'];
+            return [notificationsNormalizeOneSignalRestApiKey($envValue), 'متغيرات البيئة (ENV)'];
         }
 
         $configValue = trim((string) (defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : ''));
         if ($configValue !== '') {
-            return [$configValue, 'ملف الإعدادات (config.php)'];
+            return [notificationsNormalizeOneSignalRestApiKey($configValue), 'ملف الإعدادات (config.php)'];
         }
     }
 
@@ -219,7 +571,11 @@ function notificationsGetSettingValue(string $key, string $default = ''): string
 {
     [$value, $source] = notificationsGetSettingWithSource($key, $default);
     unset($source);
-    return trim((string) $value);
+    $value = trim((string) $value);
+    if ($key === 'onesignal_rest_api_key') {
+        return notificationsNormalizeOneSignalRestApiKey($value);
+    }
+    return $value;
 }
 
 function notificationsUpsertSetting(string $key, string $value, string $description = ''): bool
@@ -229,6 +585,9 @@ function notificationsUpsertSetting(string $key, string $value, string $descript
     }
 
     $exists = db()->fetch("SELECT setting_key FROM app_settings WHERE setting_key = ? LIMIT 1", [$key]);
+    if ($key === 'onesignal_rest_api_key') {
+        $value = notificationsNormalizeOneSignalRestApiKey($value);
+    }
     if ($exists) {
         db()->query(
             "UPDATE app_settings SET setting_value = ? WHERE setting_key = ?",
@@ -574,15 +933,14 @@ function notificationsSendPushToExternalIds(
         return $result;
     }
 
-    $appId = notificationsGetSettingValue('onesignal_app_id', '');
-    $restApiKey = notificationsGetSettingValue('onesignal_rest_api_key', '');
+    $credentialCandidates = notificationsOneSignalCredentialCandidates();
     $logoUrl = notificationsNormalizeLogoUrl(notificationsGetSettingValue('notifications_logo_url', ''));
     $smallIcon = notificationsNormalizeSmallIconName(
         notificationsGetSettingValue('notifications_small_icon', 'ic_stat_onesignal_default')
     );
     $resolvedImageUrl = notificationsNormalizeMediaUrl($imageUrl, '');
 
-    if ($appId === '' || $restApiKey === '') {
+    if (empty($credentialCandidates)) {
         $result['skipped'] = true;
         $result['skip_reason'] = 'OneSignal App ID أو REST API Key غير مضبوط.';
         return $result;
@@ -598,7 +956,6 @@ function notificationsSendPushToExternalIds(
         $result['attempted'] += count($chunk);
 
         $payload = [
-            'app_id' => $appId,
             'target_channel' => 'push',
             'include_aliases' => [
                 'external_id' => array_values($chunk),
@@ -616,38 +973,10 @@ function notificationsSendPushToExternalIds(
 
         notificationsApplyMediaToPayload($payload, $logoUrl, $resolvedImageUrl, $smallIcon);
 
-        $jsonPayload = json_encode($payload, JSON_UNESCAPED_UNICODE);
-        if ($jsonPayload === false) {
+        $postResult = notificationsPostOneSignalPayload($payload, $credentialCandidates);
+        if (empty($postResult['ok'])) {
             $result['failed'] += count($chunk);
-            $result['errors'][] = 'فشل ترميز JSON لدفعة من المستلمين.';
-            continue;
-        }
-
-        $ch = curl_init('https://api.onesignal.com/notifications');
-        curl_setopt_array($ch, [
-            CURLOPT_POST => true,
-            CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_HTTPHEADER => [
-                'Content-Type: application/json; charset=utf-8',
-                'Authorization: Key ' . $restApiKey,
-            ],
-            CURLOPT_POSTFIELDS => $jsonPayload,
-            CURLOPT_TIMEOUT => 20,
-            CURLOPT_CONNECTTIMEOUT => 6,
-        ]);
-
-        $response = curl_exec($ch);
-        $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        $curlError = curl_error($ch);
-        curl_close($ch);
-
-        if ($response === false || $statusCode < 200 || $statusCode >= 300) {
-            $result['failed'] += count($chunk);
-            $errorDetails = $curlError !== '' ? $curlError : trim((string) $response);
-            if ($errorDetails === '') {
-                $errorDetails = 'HTTP ' . $statusCode;
-            }
-            $result['errors'][] = 'دفعة فشلت (' . count($chunk) . '): ' . $errorDetails;
+            $result['errors'][] = 'دفعة فشلت (' . count($chunk) . '): ' . ($postResult['error'] ?? 'خطأ غير معروف من OneSignal');
             continue;
         }
 
@@ -680,15 +1009,14 @@ function notificationsSendPushToAllInstallations(
         return $result;
     }
 
-    $appId = notificationsGetSettingValue('onesignal_app_id', '');
-    $restApiKey = notificationsGetSettingValue('onesignal_rest_api_key', '');
+    $credentialCandidates = notificationsOneSignalCredentialCandidates();
     $logoUrl = notificationsNormalizeLogoUrl(notificationsGetSettingValue('notifications_logo_url', ''));
     $smallIcon = notificationsNormalizeSmallIconName(
         notificationsGetSettingValue('notifications_small_icon', 'ic_stat_onesignal_default')
     );
     $resolvedImageUrl = notificationsNormalizeMediaUrl($imageUrl, '');
 
-    if ($appId === '' || $restApiKey === '') {
+    if (empty($credentialCandidates)) {
         $result['skipped'] = true;
         $result['skip_reason'] = 'OneSignal App ID أو REST API Key غير مضبوط.';
         return $result;
@@ -701,7 +1029,6 @@ function notificationsSendPushToAllInstallations(
     }
 
     $payload = [
-        'app_id' => $appId,
         'target_channel' => 'push',
         'included_segments' => ['All'],
         'headings' => [
@@ -717,38 +1044,10 @@ function notificationsSendPushToAllInstallations(
 
     notificationsApplyMediaToPayload($payload, $logoUrl, $resolvedImageUrl, $smallIcon);
 
-    $jsonPayload = json_encode($payload, JSON_UNESCAPED_UNICODE);
-    if ($jsonPayload === false) {
+    $postResult = notificationsPostOneSignalPayload($payload, $credentialCandidates);
+    if (empty($postResult['ok'])) {
         $result['failed'] = 1;
-        $result['errors'][] = 'فشل ترميز JSON للإرسال العام.';
-        return $result;
-    }
-
-    $ch = curl_init('https://api.onesignal.com/notifications');
-    curl_setopt_array($ch, [
-        CURLOPT_POST => true,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => [
-            'Content-Type: application/json; charset=utf-8',
-            'Authorization: Key ' . $restApiKey,
-        ],
-        CURLOPT_POSTFIELDS => $jsonPayload,
-        CURLOPT_TIMEOUT => 20,
-        CURLOPT_CONNECTTIMEOUT => 6,
-    ]);
-
-    $response = curl_exec($ch);
-    $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    $curlError = curl_error($ch);
-    curl_close($ch);
-
-    if ($response === false || $statusCode < 200 || $statusCode >= 300) {
-        $result['failed'] = 1;
-        $errorDetails = $curlError !== '' ? $curlError : trim((string) $response);
-        if ($errorDetails === '') {
-            $errorDetails = 'HTTP ' . $statusCode;
-        }
-        $result['errors'][] = 'فشل الإرسال العام: ' . $errorDetails;
+        $result['errors'][] = 'فشل الإرسال العام: ' . ($postResult['error'] ?? 'خطأ غير معروف من OneSignal');
         return $result;
     }
 
@@ -789,8 +1088,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             (string) ($settingsInput['notifications_small_icon'] ?? 'ic_stat_onesignal_default')
         );
 
-        $existingDbRestApiKey = notificationsGetSettingFromDb('onesignal_rest_api_key');
-        $restApiKeyToSave = $restApiKeyInput !== '' ? $restApiKeyInput : $existingDbRestApiKey;
+        $restApiKeyInput = notificationsNormalizeOneSignalRestApiKey($restApiKeyInput);
+        $existingRestApiKey = notificationsGetSettingValue('onesignal_rest_api_key', '');
+        $restApiKeyToSave = $restApiKeyInput !== '' ? $restApiKeyInput : $existingRestApiKey;
 
         notificationsUpsertSetting('notifications_enabled', $enabled, 'تفعيل أو تعطيل الإشعارات الفورية');
         notificationsUpsertSetting('onesignal_app_id', $appId, 'OneSignal App ID');

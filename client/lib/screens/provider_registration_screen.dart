@@ -3,10 +3,12 @@
 
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
+import 'package:cached_network_image/cached_network_image.dart';
 import '../config/app_theme.dart';
 import '../config/app_config.dart';
 import '../services/app_localizations.dart';
 import '../services/services.dart';
+import 'static_content_page_screen.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class ProviderRegistrationScreen extends StatefulWidget {
@@ -101,7 +103,14 @@ class _ProviderRegistrationScreenState
                     : (nameAr.isNotEmpty ? nameAr : nameEn))
               : (nameEn.isNotEmpty ? nameEn : nameAr);
           if (label.isEmpty) continue;
-          mapped.add({'id': id, 'label': label, 'icon': '🛠️'});
+          final media = _serviceMediaUrl(row);
+          final symbol = _serviceSymbol(row);
+          mapped.add({
+            'id': id,
+            'label': label,
+            'icon': symbol,
+            'media': media,
+          });
         }
 
         setState(() {
@@ -174,6 +183,36 @@ class _ProviderRegistrationScreenState
     }
   }
 
+  bool _looksLikeMediaValue(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return false;
+    if (normalized.startsWith('http')) return true;
+    if (normalized.contains('/') || normalized.contains('\\')) return true;
+    return RegExp(
+      r'\.(png|jpe?g|gif|webp|svg|avif)$',
+      caseSensitive: false,
+    ).hasMatch(normalized);
+  }
+
+  String _serviceMediaUrl(Map<String, dynamic> row) {
+    final image = (row['image'] ?? '').toString().trim();
+    final icon = (row['icon'] ?? '').toString().trim();
+    for (final value in <String>[image, icon]) {
+      if (_looksLikeMediaValue(value)) {
+        return AppConfig.fixMediaUrl(value);
+      }
+    }
+    return '';
+  }
+
+  String _serviceSymbol(Map<String, dynamic> row) {
+    final icon = (row['icon'] ?? '').toString().trim();
+    if (icon.isEmpty || _looksLikeMediaValue(icon)) {
+      return '';
+    }
+    return icon;
+  }
+
   bool _validateInputs() {
     if (_nameController.text.trim().isEmpty) {
       _showError(context.tr('full_name_required'));
@@ -216,6 +255,13 @@ class _ProviderRegistrationScreenState
         context,
       ).showSnackBar(SnackBar(content: Text(context.tr('open_dialer_failed'))));
     }
+  }
+
+  void _openStaticContentPage(StaticContentPageKey page) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => StaticContentPageScreen(page: page)),
+    );
   }
 
   @override
@@ -532,10 +578,7 @@ class _ProviderRegistrationScreenState
                     ),
                     child: Column(
                       children: [
-                        Text(
-                          service['icon']!,
-                          style: const TextStyle(fontSize: 24),
-                        ),
+                        _buildServiceVisual(service),
                         const SizedBox(height: 4),
                         Text(
                           context.tr(service['label']!),
@@ -555,6 +598,28 @@ class _ProviderRegistrationScreenState
         ],
       ),
     );
+  }
+
+  Widget _buildServiceVisual(Map<String, String> service) {
+    final media = (service['media'] ?? '').trim();
+    final icon = (service['icon'] ?? '').trim();
+    if (media.isNotEmpty) {
+      return ClipRRect(
+        borderRadius: BorderRadius.circular(10),
+        child: CachedNetworkImage(
+          imageUrl: media,
+          width: 34,
+          height: 34,
+          fit: BoxFit.cover,
+          errorWidget: (_, __, ___) =>
+              const Icon(Icons.category_outlined, size: 28),
+        ),
+      );
+    }
+    if (icon.isNotEmpty) {
+      return Text(icon, style: const TextStyle(fontSize: 24));
+    }
+    return const Icon(Icons.category_outlined, size: 28);
   }
 
   Widget _buildExperienceCard() {
@@ -691,6 +756,19 @@ class _ProviderRegistrationScreenState
   }
 
   Widget _buildTermsCard() {
+    const normalStyle = TextStyle(
+      color: AppColors.gray700,
+      fontSize: 13,
+      height: 1.4,
+    );
+    const linkStyle = TextStyle(
+      color: Colors.indigo,
+      fontSize: 13,
+      height: 1.4,
+      fontWeight: FontWeight.bold,
+      decoration: TextDecoration.underline,
+    );
+
     return Container(
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
@@ -716,28 +794,28 @@ class _ProviderRegistrationScreenState
           ),
           const SizedBox(width: 12),
           Expanded(
-            child: GestureDetector(
-              onTap: () => setState(() => _agreedToTerms = !_agreedToTerms),
-              child: RichText(
-                text: TextSpan(
-                  style: TextStyle(
-                    color: AppColors.gray700,
-                    fontSize: 13,
-                    height: 1.4,
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text('${context.tr('i_agree_to')} ', style: normalStyle),
+                InkWell(
+                  onTap: () =>
+                      _openStaticContentPage(StaticContentPageKey.terms),
+                  child: Text(
+                    context.tr('terms_and_conditions'),
+                    style: linkStyle,
                   ),
-                  children: [
-                    TextSpan(text: '${context.tr('i_agree_to')} '),
-                    TextSpan(
-                      text: context.tr('terms_and_conditions'),
-                      style: TextStyle(
-                        color: Colors.indigo,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    TextSpan(text: ' ${context.tr('provider_terms_suffix')}'),
-                  ],
                 ),
-              ),
+                Text(' ', style: normalStyle),
+                InkWell(
+                  onTap: () =>
+                      _openStaticContentPage(StaticContentPageKey.privacy),
+                  child: Text(
+                    context.tr('provider_terms_suffix'),
+                    style: linkStyle,
+                  ),
+                ),
+              ],
             ),
           ),
         ],

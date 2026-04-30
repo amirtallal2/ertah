@@ -880,6 +880,47 @@ function specialNormalizeDateValue($value): ?string
 }
 
 /**
+ * توحيد تواريخ إيجار الحاويات: تاريخ النهاية يجب أن يكون بعد البداية.
+ */
+function specialNormalizeContainerRentalDates($startDate, $endDate, $durationDays = 1): array
+{
+    $durationDays = max(1, (int) $durationDays);
+    $normalizedStart = specialNormalizeDateValue($startDate);
+    $normalizedEnd = specialNormalizeDateValue($endDate);
+
+    if ($normalizedStart === null) {
+        return [
+            'start_date' => null,
+            'end_date' => $normalizedEnd,
+            'duration_days' => $durationDays,
+        ];
+    }
+
+    $startTimestamp = strtotime($normalizedStart);
+    $endTimestamp = $normalizedEnd !== null ? strtotime($normalizedEnd) : false;
+
+    if ($startTimestamp === false) {
+        return [
+            'start_date' => null,
+            'end_date' => $normalizedEnd,
+            'duration_days' => $durationDays,
+        ];
+    }
+
+    if ($endTimestamp === false || $endTimestamp <= $startTimestamp) {
+        $normalizedEnd = date('Y-m-d', strtotime('+' . $durationDays . ' days', $startTimestamp));
+    } else {
+        $durationDays = max(1, (int) floor(($endTimestamp - $startTimestamp) / 86400));
+    }
+
+    return [
+        'start_date' => $normalizedStart,
+        'end_date' => $normalizedEnd,
+        'duration_days' => $durationDays,
+    ];
+}
+
+/**
  * ترحيل تلقائي لطلبات الحاويات/العفش القديمة من orders إلى الجداول المخصصة.
  * يفيد عند وجود بيانات تاريخية قبل الفصل بين الصفحات.
  */
@@ -1030,6 +1071,12 @@ function specialBackfillSpecialRequestsFromOrders(int $limit = 250): array
             }
 
             $durationDays = max(1, (int) ($containerRequest['duration_days'] ?? 1));
+            $containerDates = specialNormalizeContainerRentalDates(
+                $containerRequest['start_date'] ?? ($order['scheduled_date'] ?? null),
+                $containerRequest['end_date'] ?? null,
+                $durationDays
+            );
+            $durationDays = (int) $containerDates['duration_days'];
             $quantity = max(1, (int) ($containerRequest['quantity'] ?? 1));
             $weightKg = specialToPositiveFloat($containerRequest['estimated_weight_kg'] ?? 0);
             $distanceMeters = specialToPositiveFloat($containerRequest['estimated_distance_meters'] ?? 0);
@@ -1076,8 +1123,8 @@ function specialBackfillSpecialRequestsFromOrders(int $limit = 250): array
                 'phone' => $userPhone,
                 'site_city' => trim((string) ($containerRequest['site_city'] ?? '')),
                 'site_address' => trim((string) ($containerRequest['site_address'] ?? $orderAddress)),
-                'start_date' => specialNormalizeDateValue($containerRequest['start_date'] ?? ($order['scheduled_date'] ?? null)),
-                'end_date' => specialNormalizeDateValue($containerRequest['end_date'] ?? null),
+                'start_date' => $containerDates['start_date'],
+                'end_date' => $containerDates['end_date'],
                 'duration_days' => $durationDays,
                 'quantity' => $quantity,
                 'needs_loading_help' => !empty($containerRequest['needs_loading_help']) ? 1 : 0,

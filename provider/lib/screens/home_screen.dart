@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../config/app_config.dart';
 import '../config/app_theme.dart';
@@ -12,6 +11,7 @@ import '../services/providers_service.dart';
 import '../utils/saudi_riyal_icon.dart';
 import 'order_details_screen.dart';
 import 'provider_profile_setup_screen.dart';
+import 'static_content_page_screen.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -80,6 +80,11 @@ class _HomeScreenState extends State<HomeScreen>
         .map((item) => int.tryParse(item.trim()) ?? 0)
         .where((id) => id != 0)
         .toList();
+  }
+
+  double _doubleFrom(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '0') ?? 0;
   }
 
   @override
@@ -246,20 +251,11 @@ class _HomeScreenState extends State<HomeScreen>
     await _refreshDashboard();
   }
 
-  Future<void> _openExternalUrl(String url) async {
-    final uri = Uri.tryParse(url);
-    if (uri == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.tr('order_action_failed_default'))),
-      );
-      return;
-    }
-    final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
-    if (!launched && mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.tr('order_action_failed_default'))),
-      );
-    }
+  void _openStaticContentPage(StaticContentPageKey page) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => StaticContentPageScreen(page: page)),
+    );
   }
 
   void _showAccountActions() {
@@ -277,7 +273,7 @@ class _HomeScreenState extends State<HomeScreen>
               title: Text(context.tr('privacy_policy')),
               onTap: () {
                 Navigator.pop(sheetContext);
-                _openExternalUrl(AppConfig.privacyUrl);
+                _openStaticContentPage(StaticContentPageKey.privacy);
               },
             ),
             ListTile(
@@ -285,7 +281,7 @@ class _HomeScreenState extends State<HomeScreen>
               title: Text(context.tr('terms_and_conditions')),
               onTap: () {
                 Navigator.pop(sheetContext);
-                _openExternalUrl(AppConfig.termsUrl);
+                _openStaticContentPage(StaticContentPageKey.terms);
               },
             ),
             ListTile(
@@ -579,8 +575,21 @@ class _HomeScreenState extends State<HomeScreen>
     final profile = authProvider.providerProfile ?? <String, dynamic>{};
     final fullName = (profile['full_name'] ?? '').toString().trim();
     final rating = double.tryParse(profile['rating']?.toString() ?? '0') ?? 0;
-    final wallet =
-        double.tryParse(profile['wallet_balance']?.toString() ?? '0') ?? 0;
+    final financeSummary = profile['financial_summary'] is Map
+        ? Map<String, dynamic>.from(
+            (profile['financial_summary'] as Map).map(
+              (key, value) => MapEntry(key.toString(), value),
+            ),
+          )
+        : <String, dynamic>{};
+    final wallet = _doubleFrom(
+      financeSummary['available_balance'] ?? profile['wallet_balance'],
+    );
+    final pendingBalance = _doubleFrom(financeSummary['pending_balance']);
+    final transferredTotal = _doubleFrom(financeSummary['transferred_total']);
+    final deductionsTotal =
+        _doubleFrom(financeSummary['deductions_total']) +
+        _doubleFrom(financeSummary['commission_total']);
     final avatarRaw = (profile['avatar'] ?? '').toString().trim();
     final avatarUrl =
         avatarRaw.isNotEmpty &&
@@ -734,6 +743,57 @@ class _HomeScreenState extends State<HomeScreen>
               ),
             ],
           ),
+          if (financeSummary.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Row(
+              children: [
+                statItem(
+                  icon: Icons.pending_actions_outlined,
+                  label: context.tr('provider_finance_pending'),
+                  valueWidget: SaudiRiyalText(
+                    text: pendingBalance.toStringAsFixed(0),
+                    style: TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: Colors.orange.shade800,
+                    ),
+                    iconSize: 12,
+                  ),
+                  color: Colors.orange.shade800,
+                ),
+                const SizedBox(width: 8),
+                statItem(
+                  icon: Icons.payments_outlined,
+                  label: context.tr('provider_finance_transferred'),
+                  valueWidget: SaudiRiyalText(
+                    text: transferredTotal.toStringAsFixed(0),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: AppColors.success,
+                    ),
+                    iconSize: 12,
+                  ),
+                  color: AppColors.success,
+                ),
+                const SizedBox(width: 8),
+                statItem(
+                  icon: Icons.remove_circle_outline,
+                  label: context.tr('provider_finance_deductions'),
+                  valueWidget: SaudiRiyalText(
+                    text: deductionsTotal.toStringAsFixed(0),
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                      fontSize: 13,
+                      color: AppColors.error,
+                    ),
+                    iconSize: 12,
+                  ),
+                  color: AppColors.error,
+                ),
+              ],
+            ),
+          ],
           const SizedBox(height: 8),
           Row(
             children: [

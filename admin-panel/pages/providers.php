@@ -6,6 +6,7 @@
 
 require_once '../init.php';
 requireLogin();
+require_once '../includes/provider_finance.php';
 
 $pageTitle = 'مقدمي الخدمات';
 $pageSubtitle = 'إدارة مقدمي الخدمات والفنيين';
@@ -125,6 +126,7 @@ function ensureProvidersAdminSchema(): void
 }
 
 ensureProvidersAdminSchema();
+providerFinanceEnsureSchema();
 
 $hasProvidersTable = providerAdminTableExists('providers');
 $hasProviderServicesTable = providerAdminTableExists('provider_services');
@@ -136,6 +138,49 @@ $hasProviderCommissionColumn = providerAdminColumnExists('commission_rate');
 // معالجة الإجراءات
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && $hasProvidersTable) {
     $postAction = post('action');
+
+    if ($postAction === 'sync_provider_finance') {
+        $providerId = (int) post('provider_id');
+        if ($providerId <= 0) {
+            setFlashMessage('danger', 'مقدم الخدمة غير صحيح');
+            redirect('providers.php');
+        }
+
+        try {
+            $syncResult = providerFinanceSyncAllFromOrders();
+            providerFinanceSyncProviderWalletBalance($providerId);
+            providerFinanceSyncProviderOrderStats($providerId);
+            logActivity('sync_provider_finance', 'providers', $providerId, $syncResult);
+            setFlashMessage('success', 'تم تحديث حسابات مقدمي الخدمات من الطلبات والحركات المالية');
+        } catch (Throwable $e) {
+            setFlashMessage('danger', 'تعذر تحديث الحسابات المالية: ' . $e->getMessage());
+        }
+        redirect('providers.php?action=view&id=' . $providerId);
+    }
+
+    if ($postAction === 'add_financial_movement') {
+        $providerId = (int) post('provider_id');
+        $movementType = trim((string) post('movement_type'));
+        $amount = (float) post('amount');
+        $description = trim((string) post('description'));
+
+        if ($providerId <= 0) {
+            setFlashMessage('danger', 'مقدم الخدمة غير صحيح');
+            redirect('providers.php');
+        }
+
+        try {
+            providerFinanceCreateManualMovement($providerId, $movementType, $amount, $description);
+            logActivity('add_provider_financial_movement', 'providers', $providerId, [
+                'movement_type' => $movementType,
+                'amount' => $amount,
+            ]);
+            setFlashMessage('success', 'تم تسجيل الحركة المالية وتحديث رصيد مقدم الخدمة');
+        } catch (Throwable $e) {
+            setFlashMessage('danger', 'تعذر تسجيل الحركة المالية: ' . $e->getMessage());
+        }
+        redirect('providers.php?action=view&id=' . $providerId);
+    }
 
     if ($postAction === 'approve') {
         $providerId = (int) post('provider_id');
@@ -335,6 +380,9 @@ $serviceFilterId = (int) get('service_id');
 $page = max(1, (int) get('page', 1));
 $hasCategoryHierarchy = $hasProviderServicesTable && $hasServiceCategoriesTable && hasServiceCategoryParentColumn();
 $serviceFilterOptions = ($hasProviderServicesTable && $hasServiceCategoriesTable) ? getServiceCategoriesHierarchy(false) : [];
+$serviceFilterOptions = array_values(array_filter($serviceFilterOptions, static function ($category) {
+    return !isOtherServiceCategoryLabel($category['name_ar'] ?? '', $category['name_en'] ?? '');
+}));
 $serviceFilterLabel = '';
 if ($serviceFilterId > 0 && !empty($serviceFilterOptions)) {
     foreach ($serviceFilterOptions as $serviceFilterOption) {
@@ -556,6 +604,20 @@ if (($action === 'view' || $action === 'edit') && $id) {
         return (int) ($serviceRow['id'] ?? 0);
     }, $providerServices)));
     $editCategoryOptions = ($hasProviderServicesTable && $hasServiceCategoriesTable) ? getServiceCategoriesHierarchy(false) : [];
+    $editCategoryOptions = array_values(array_filter($editCategoryOptions, static function ($category) {
+        return !isOtherServiceCategoryLabel($category['name_ar'] ?? '', $category['name_en'] ?? '');
+    }));
+
+    $providerFinanceSummary = providerFinanceGetSummary($id);
+    $providerFinancialTransactions = [];
+    try {
+        providerFinanceSyncProviderOrderStats($id);
+        $providerFinanceSummary = providerFinanceSyncProviderWalletBalance($id);
+        $providerFinancialTransactions = providerFinanceGetProviderTransactions($id, 15);
+        $provider['wallet_balance'] = $providerFinanceSummary['available_balance'] ?? ($provider['wallet_balance'] ?? 0);
+    } catch (Throwable $e) {
+        error_log('Provider finance summary failed for provider ' . $id . ': ' . $e->getMessage());
+    }
 
     // الطلبات
     $providerOrders = [];
@@ -722,6 +784,7 @@ include '../includes/header.php';
                                 <th>الخدمات المنتسب لها</th>
                                 <th>التقييم</th>
                                 <th>الطلبات</th>
+                                <th>الرصيد</th>
                                 <th>العمولة</th>
                                 <th>الحالة</th>
                                 <th>التسجيل</th>
@@ -804,6 +867,9 @@ include '../includes/header.php';
                                         <span>
                                             <?php echo $provider['total_orders']; ?>
                                         </span>
+                                    </td>
+                                    <td>
+                                        <strong style="color: #065f46;"><?php echo number_format((float) ($provider['wallet_balance'] ?? 0), 2); ?> ⃁</strong>
                                     </td>
                                     <td>
                                         <?php echo $provider['commission_rate']; ?>%
@@ -951,9 +1017,23 @@ include '../includes/header.php';
                 <div
                     style="background: linear-gradient(135deg, #d1fae5, #a7f3d0); border-radius: 12px; padding: 20px; margin-bottom: 20px;">
                     <div style="font-size: 28px; font-weight: 700; color: #065f46;">
-                        <?php echo number_format($provider['wallet_balance'], 2); ?> ⃁
+                        <?php echo number_format((float) ($providerFinanceSummary['available_balance'] ?? $provider['wallet_balance'] ?? 0), 2); ?> ⃁
                     </div>
-                    <div style="color: #065f46; font-size: 14px;">رصيد المحفظة</div>
+                    <div style="color: #065f46; font-size: 14px;">الرصيد المتاح للتحويل</div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 14px; text-align: center;">
+                        <div style="background: rgba(255,255,255,0.55); border-radius: 10px; padding: 10px;">
+                            <div style="font-weight: 700; color: #92400e;">
+                                <?php echo number_format((float) ($providerFinanceSummary['pending_balance'] ?? 0), 2); ?> ⃁
+                            </div>
+                            <div style="font-size: 12px; color: #92400e;">معلق</div>
+                        </div>
+                        <div style="background: rgba(255,255,255,0.55); border-radius: 10px; padding: 10px;">
+                            <div style="font-weight: 700; color: #991b1b;">
+                                <?php echo number_format((float) ($providerFinanceSummary['deductions_total'] ?? 0) + (float) ($providerFinanceSummary['commission_total'] ?? 0), 2); ?> ⃁
+                            </div>
+                            <div style="font-size: 12px; color: #991b1b;">خصومات/عمولات</div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- المعلومات -->
@@ -1092,10 +1172,114 @@ include '../includes/header.php';
                         <button type="submit" class="btn btn-primary">تحديث العمولة</button>
                     </div>
                 </form>
+
+                <form method="POST" style="margin-top: 10px;">
+                    <input type="hidden" name="action" value="sync_provider_finance">
+                    <input type="hidden" name="provider_id" value="<?php echo (int) $provider['id']; ?>">
+                    <button type="submit" class="btn btn-outline btn-block">
+                        <i class="fas fa-rotate"></i> تحديث الحسابات من الطلبات
+                    </button>
+                </form>
             </div>
         </div>
 
         <div>
+            <!-- الحساب المالي -->
+            <div class="card animate-slideUp" style="margin-bottom: 25px;">
+                <div class="card-header">
+                    <h3 class="card-title">
+                        <i class="fas fa-wallet" style="color: var(--success-color);"></i>
+                        الحساب المالي لمقدم الخدمة
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px;">
+                        <div style="background: #ecfdf5; border: 1px solid #bbf7d0; border-radius: 12px; padding: 14px;">
+                            <div style="font-size: 12px; color: #047857;">متاح للتحويل</div>
+                            <strong style="font-size: 20px; color: #065f46;"><?php echo number_format((float) ($providerFinanceSummary['available_balance'] ?? 0), 2); ?> ⃁</strong>
+                        </div>
+                        <div style="background: #fffbeb; border: 1px solid #fde68a; border-radius: 12px; padding: 14px;">
+                            <div style="font-size: 12px; color: #92400e;">مستحقات معلقة</div>
+                            <strong style="font-size: 20px; color: #92400e;"><?php echo number_format((float) ($providerFinanceSummary['pending_balance'] ?? 0), 2); ?> ⃁</strong>
+                        </div>
+                        <div style="background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 12px; padding: 14px;">
+                            <div style="font-size: 12px; color: #1d4ed8;">إجمالي مستحقات الطلبات</div>
+                            <strong style="font-size: 20px; color: #1e40af;"><?php echo number_format((float) ($providerFinanceSummary['gross_earnings'] ?? 0), 2); ?> ⃁</strong>
+                        </div>
+                        <div style="background: #fef2f2; border: 1px solid #fecaca; border-radius: 12px; padding: 14px;">
+                            <div style="font-size: 12px; color: #991b1b;">تحويلات/خصومات</div>
+                            <strong style="font-size: 20px; color: #991b1b;"><?php echo number_format((float) ($providerFinanceSummary['transferred_total'] ?? 0) + (float) ($providerFinanceSummary['deductions_total'] ?? 0) + (float) ($providerFinanceSummary['commission_total'] ?? 0), 2); ?> ⃁</strong>
+                        </div>
+                    </div>
+
+                    <form method="POST" style="border: 1px solid var(--gray-200); border-radius: 12px; padding: 14px; margin-bottom: 18px;">
+                        <input type="hidden" name="action" value="add_financial_movement">
+                        <input type="hidden" name="provider_id" value="<?php echo (int) $provider['id']; ?>">
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; align-items: end;">
+                            <div>
+                                <label class="form-label">نوع الحركة</label>
+                                <select name="movement_type" class="form-control" required>
+                                    <option value="transfer">تحويل أموال للمقدم</option>
+                                    <option value="earning_pending">إضافة مستحق معلق</option>
+                                    <option value="earning">إضافة مستحق متاح</option>
+                                    <option value="deduction">خصم</option>
+                                    <option value="adjustment_in">تسوية دائنة</option>
+                                    <option value="adjustment_out">تسوية مدينة</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label class="form-label">المبلغ</label>
+                                <input type="number" name="amount" class="form-control" min="0.01" step="0.01" required>
+                            </div>
+                            <div>
+                                <label class="form-label">ملاحظة</label>
+                                <input type="text" name="description" class="form-control" placeholder="مثال: تحويل بنكي / خصم مخالفة">
+                            </div>
+                            <button type="submit" class="btn btn-primary">
+                                <i class="fas fa-plus"></i> إضافة الحركة
+                            </button>
+                        </div>
+                    </form>
+
+                    <?php if (empty($providerFinancialTransactions)): ?>
+                        <p style="color: #6b7280; text-align: center;">لا توجد حركات مالية لهذا المقدم حتى الآن</p>
+                    <?php else: ?>
+                        <div class="table-responsive">
+                            <table class="table">
+                                <thead>
+                                    <tr>
+                                        <th>التاريخ</th>
+                                        <th>النوع</th>
+                                        <th>الطلب</th>
+                                        <th>الحالة</th>
+                                        <th>المبلغ</th>
+                                        <th>الوصف</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <?php foreach ($providerFinancialTransactions as $movement): ?>
+                                        <?php
+                                            $signedAmount = (float) ($movement['signed_amount'] ?? providerFinanceSignedAmount($movement));
+                                            $amountColor = $signedAmount >= 0 ? '#047857' : '#b91c1c';
+                                        ?>
+                                        <tr>
+                                            <td><?php echo formatDateTime($movement['created_at'] ?? null); ?></td>
+                                            <td><?php echo providerFinanceTransactionTypeLabel((string) ($movement['type'] ?? '')); ?></td>
+                                            <td><?php echo !empty($movement['order_number']) ? htmlspecialchars((string) $movement['order_number'], ENT_QUOTES, 'UTF-8') : '-'; ?></td>
+                                            <td><?php echo providerFinanceTransactionStatusLabel((string) ($movement['status'] ?? 'completed')); ?></td>
+                                            <td style="font-weight: 700; color: <?php echo $amountColor; ?>;">
+                                                <?php echo ($signedAmount >= 0 ? '+' : '-') . number_format(abs($signedAmount), 2); ?> ⃁
+                                            </td>
+                                            <td><?php echo htmlspecialchars((string) ($movement['description'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                </tbody>
+                            </table>
+                        </div>
+                    <?php endif; ?>
+                </div>
+            </div>
+
             <!-- الخدمات -->
             <div class="card animate-slideUp" style="margin-bottom: 25px;">
                 <div class="card-header">

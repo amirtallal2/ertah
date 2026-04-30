@@ -12,7 +12,7 @@ class FurnitureRequestsService {
 
   Future<ApiResponse> createRequest({
     int? serviceId,
-    required int areaId,
+    int? areaId,
     required String pickupAddress,
     required String dropoffAddress,
     String? pickupCity,
@@ -28,7 +28,7 @@ class FurnitureRequestsService {
   }) async {
     final body = <String, dynamic>{
       if (serviceId != null && serviceId > 0) 'service_id': serviceId,
-      'area_id': areaId,
+      if (areaId != null && areaId > 0) 'area_id': areaId,
       'pickup_address': pickupAddress,
       'dropoff_address': dropoffAddress,
       if (pickupCity != null && pickupCity.trim().isNotEmpty)

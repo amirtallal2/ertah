@@ -76,6 +76,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('container-requests.php' . ($postAction === 'edit' ? '?action=edit&id=' . (int) post('id') : ''));
         }
 
+        $containerDates = specialNormalizeContainerRentalDates(
+            containerNullableDate('start_date'),
+            containerNullableDate('end_date'),
+            max(1, (int) post('duration_days', 1))
+        );
+
         $data = [
             'container_service_id' => $serviceId,
             'container_store_id' => $storeId,
@@ -83,9 +89,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'phone' => $phone,
             'site_city' => clean(post('site_city')),
             'site_address' => clean(post('site_address')),
-            'start_date' => containerNullableDate('start_date'),
-            'end_date' => containerNullableDate('end_date'),
-            'duration_days' => max(1, (int) post('duration_days', 1)),
+            'start_date' => $containerDates['start_date'],
+            'end_date' => $containerDates['end_date'],
+            'duration_days' => $containerDates['duration_days'],
             'quantity' => max(1, (int) post('quantity', 1)),
             'estimated_weight_kg' => containerNullableFloat('estimated_weight_kg'),
             'estimated_distance_meters' => containerNullableFloat('estimated_distance_meters'),
@@ -640,5 +646,60 @@ include '../includes/header.php';
         </form>
     </div>
 <?php endif; ?>
+
+<script>
+document.querySelectorAll('form').forEach((form) => {
+    const startInput = form.querySelector('input[name="start_date"]');
+    const endInput = form.querySelector('input[name="end_date"]');
+    const durationInput = form.querySelector('input[name="duration_days"]');
+    if (!startInput || !endInput || !durationInput) {
+        return;
+    }
+
+    const parseDate = (value) => {
+        if (!value) return null;
+        const parts = value.split('-').map((part) => parseInt(part, 10));
+        if (parts.length !== 3 || parts.some(Number.isNaN)) return null;
+        return new Date(parts[0], parts[1] - 1, parts[2]);
+    };
+    const formatDate = (date) => {
+        const year = date.getFullYear();
+        const month = String(date.getMonth() + 1).padStart(2, '0');
+        const day = String(date.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    };
+    const addDays = (date, days) => {
+        const next = new Date(date);
+        next.setDate(next.getDate() + days);
+        return next;
+    };
+    const durationValue = () => Math.max(1, parseInt(durationInput.value || '1', 10) || 1);
+    const syncFromStartOrDuration = () => {
+        const start = parseDate(startInput.value);
+        if (!start) return;
+        const end = parseDate(endInput.value);
+        if (!end || end <= start) {
+            endInput.value = formatDate(addDays(start, durationValue()));
+            return;
+        }
+        durationInput.value = Math.max(1, Math.round((end - start) / 86400000));
+    };
+    const syncFromEnd = () => {
+        const start = parseDate(startInput.value);
+        const end = parseDate(endInput.value);
+        if (!start || !end) return;
+        if (end <= start) {
+            endInput.value = formatDate(addDays(start, 1));
+            durationInput.value = '1';
+            return;
+        }
+        durationInput.value = Math.max(1, Math.round((end - start) / 86400000));
+    };
+
+    startInput.addEventListener('change', syncFromStartOrDuration);
+    durationInput.addEventListener('change', syncFromStartOrDuration);
+    endInput.addEventListener('change', syncFromEnd);
+});
+</script>
 
 <?php include '../includes/footer.php'; ?>

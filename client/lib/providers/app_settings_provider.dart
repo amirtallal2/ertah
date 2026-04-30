@@ -10,6 +10,7 @@ class AppSettingsProvider extends ChangeNotifier with WidgetsBindingObserver {
   String _appName = '';
   String? _appLogoUrl;
   double _sparePartsMinOrderWithInstallation = 0;
+  bool _darfixAiEnabled = false;
   bool _isInitialized = false;
   bool _isLoading = false;
 
@@ -18,6 +19,7 @@ class AppSettingsProvider extends ChangeNotifier with WidgetsBindingObserver {
   String? get appLogoUrl => _appLogoUrl;
   double get sparePartsMinOrderWithInstallation =>
       _sparePartsMinOrderWithInstallation;
+  bool get isDarfixAiEnabled => _darfixAiEnabled;
   bool get isInitialized => _isInitialized;
 
   AppSettingsProvider() {
@@ -44,15 +46,23 @@ class AppSettingsProvider extends ChangeNotifier with WidgetsBindingObserver {
         final nextMinOrder = _normalizeDouble(
           data['spare_parts_min_order_with_installation'],
         );
+        final nextDarfixAiEnabled = _normalizeBool(
+          (data['darfix_ai'] is Map)
+              ? (data['darfix_ai'] as Map)['enabled']
+              : data['darfix_ai_enabled'],
+          defaultValue: true,
+        );
         final hasChanged =
             nextFont != _appFont ||
             nextLogo != _appLogoUrl ||
             nextName != _appName ||
-            nextMinOrder != _sparePartsMinOrderWithInstallation;
+            nextMinOrder != _sparePartsMinOrderWithInstallation ||
+            nextDarfixAiEnabled != _darfixAiEnabled;
         _appFont = nextFont;
         _appLogoUrl = nextLogo;
         _appName = nextName;
         _sparePartsMinOrderWithInstallation = nextMinOrder;
+        _darfixAiEnabled = nextDarfixAiEnabled;
         if (hasChanged || forceNotify) {
           notifyListeners();
         }
@@ -62,6 +72,7 @@ class AppSettingsProvider extends ChangeNotifier with WidgetsBindingObserver {
       _appLogoUrl = null;
       _appName = '';
       _sparePartsMinOrderWithInstallation = 0;
+      _darfixAiEnabled = false;
     } finally {
       _isLoading = false;
       _isInitialized = true;
@@ -102,5 +113,21 @@ class AppSettingsProvider extends ChangeNotifier with WidgetsBindingObserver {
     }
     final parsed = double.tryParse(value?.toString().trim() ?? '');
     return parsed ?? 0;
+  }
+
+  bool _normalizeBool(dynamic value, {required bool defaultValue}) {
+    if (value == null) {
+      return defaultValue;
+    }
+    if (value is bool) {
+      return value;
+    }
+
+    final normalized = value.toString().trim().toLowerCase();
+    if (normalized.isEmpty) {
+      return defaultValue;
+    }
+
+    return <String>['1', 'true', 'yes', 'on'].contains(normalized);
   }
 }

@@ -1,6 +1,8 @@
 // All Spares Screen
 // شاشة جميع قطع الغيار
 
+import 'dart:async';
+
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
@@ -67,6 +69,8 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
   final OrdersService _ordersService = OrdersService();
   final AddressesService _addressesService = AddressesService();
   bool _autoAddHandled = false;
+  Timer? _topNoticeTimer;
+  String? _topNoticeMessage;
   static const List<Shadow> _headerTextShadows = <Shadow>[
     Shadow(color: Color(0x66000000), offset: Offset(0, 1), blurRadius: 2),
   ];
@@ -140,6 +144,12 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
       if (!mounted) return;
       await _addSpareToCart(targetSpare!);
     });
+  }
+
+  @override
+  void dispose() {
+    _topNoticeTimer?.cancel();
+    super.dispose();
   }
 
   String _spareCategoryLabel(Map<String, dynamic> spare) {
@@ -494,9 +504,190 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
         .tr('spares_added_with_mode')
         .replaceAll('{name}', name)
         .replaceAll('{mode}', _spareModeLabel(mode));
-    ScaffoldMessenger.of(
-      context,
-    ).showSnackBar(SnackBar(content: Text(message)));
+    _showTopNotice(message);
+  }
+
+  void _showTopNotice(String message) {
+    _topNoticeTimer?.cancel();
+    if (!mounted) return;
+
+    setState(() {
+      _topNoticeMessage = message;
+    });
+
+    _topNoticeTimer = Timer(const Duration(milliseconds: 1600), () {
+      if (!mounted) return;
+      setState(() => _topNoticeMessage = null);
+    });
+  }
+
+  Widget _buildTopNoticeOverlay() {
+    return IgnorePointer(
+      ignoring: true,
+      child: SafeArea(
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: AnimatedSwitcher(
+            duration: const Duration(milliseconds: 220),
+            switchInCurve: Curves.easeOut,
+            switchOutCurve: Curves.easeIn,
+            transitionBuilder: (child, animation) {
+              final offset = Tween<Offset>(
+                begin: const Offset(0, -0.18),
+                end: Offset.zero,
+              ).animate(animation);
+              return FadeTransition(
+                opacity: animation,
+                child: SlideTransition(position: offset, child: child),
+              );
+            },
+            child: _topNoticeMessage == null
+                ? const SizedBox.shrink()
+                : Container(
+                    key: ValueKey<String>(_topNoticeMessage!),
+                    margin: const EdgeInsets.fromLTRB(16, 10, 16, 0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF111827),
+                      borderRadius: BorderRadius.circular(14),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.18),
+                          blurRadius: 18,
+                          offset: const Offset(0, 8),
+                        ),
+                      ],
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Icon(
+                          Icons.check_circle_rounded,
+                          color: Color(0xFF34D399),
+                          size: 18,
+                        ),
+                        const SizedBox(width: 10),
+                        Flexible(
+                          child: Text(
+                            _topNoticeMessage!,
+                            style: const TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildQuantityControl({
+    required String key,
+    required int quantity,
+    bool compact = false,
+  }) {
+    final buttonSize = compact ? 28.0 : 34.0;
+    final iconSize = compact ? 16.0 : 18.0;
+
+    Widget actionButton({
+      required IconData icon,
+      required VoidCallback onTap,
+      required Color backgroundColor,
+      required Color iconColor,
+    }) {
+      return Material(
+        color: backgroundColor,
+        borderRadius: BorderRadius.circular(10),
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(10),
+          child: SizedBox(
+            width: buttonSize,
+            height: buttonSize,
+            child: Icon(icon, color: iconColor, size: iconSize),
+          ),
+        ),
+      );
+    }
+
+    return Container(
+      padding: EdgeInsets.symmetric(
+        horizontal: compact ? 6 : 8,
+        vertical: compact ? 6 : 8,
+      ),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: AppColors.gray200),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          actionButton(
+            icon: Icons.remove_rounded,
+            onTap: () => _changeCartQuantity(key, -1),
+            backgroundColor: const Color(0xFFFFF1F2),
+            iconColor: const Color(0xFFE11D48),
+          ),
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: compact ? 8 : 10),
+            child: Text(
+              '$quantity',
+              style: TextStyle(
+                fontSize: compact ? 12 : 14,
+                fontWeight: FontWeight.w800,
+                color: AppColors.gray900,
+              ),
+            ),
+          ),
+          actionButton(
+            icon: Icons.add_rounded,
+            onTap: () => _changeCartQuantity(key, 1),
+            backgroundColor: const Color(0xFFFFF9E7),
+            iconColor: AppColors.primaryDark,
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildCartPriceStat({
+    required String label,
+    required double amount,
+    bool emphasized = false,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
+            fontSize: 10,
+            color: AppColors.gray500,
+            fontWeight: emphasized ? FontWeight.w700 : FontWeight.w600,
+          ),
+        ),
+        const SizedBox(height: 2),
+        SaudiRiyalText(
+          text: amount.toStringAsFixed(2),
+          style: TextStyle(
+            fontSize: emphasized ? 14 : 12,
+            fontWeight: FontWeight.w800,
+            color: emphasized ? AppColors.primary : AppColors.gray800,
+          ),
+          iconSize: emphasized ? 13 : 12,
+        ),
+      ],
+    );
   }
 
   void _changeCartQuantity(String key, int delta) {
@@ -1334,7 +1525,9 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
                       (createdOrder['category_name'] ??
                               context.tr('spares_custom_service_title'))
                           .toString(),
-                  categoryIcon: (createdOrder['category_icon'] ?? '🔧')
+                  categoryIcon: (createdOrder['category_icon'] ?? '')
+                      .toString(),
+                  categoryImage: (createdOrder['category_image'] ?? '')
                       .toString(),
                 );
               });
@@ -1366,10 +1559,17 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
     if (_isLoading) {
       return Scaffold(
         backgroundColor: AppColors.gray50,
-        body: Column(
+        body: Stack(
           children: [
-            _buildHeader(),
-            const Expanded(child: Center(child: CircularProgressIndicator())),
+            Column(
+              children: [
+                _buildHeader(),
+                const Expanded(
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              ],
+            ),
+            _buildTopNoticeOverlay(),
           ],
         ),
       );
@@ -1377,37 +1577,44 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
 
     return Scaffold(
       backgroundColor: AppColors.gray50,
-      body: Column(
+      body: Stack(
         children: [
-          _buildHeader(),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: _fetchSpares,
-              child: SingleChildScrollView(
-                physics: const AlwaysScrollableScrollPhysics(),
-                padding: EdgeInsets.fromLTRB(
-                  16,
-                  16,
-                  16,
-                  _cartItems.isEmpty ? 80 : 140,
-                ),
-                child: Column(
-                  children: [
-                    _buildInfoBanner().animate().fadeIn().slideY(begin: 0.1),
-                    const SizedBox(height: 16),
-                    ..._filteredSpares.asMap().entries.map((entry) {
-                      return _buildSpareCard(entry.value)
-                          .animate()
-                          .fadeIn(delay: (entry.key * 100).ms)
-                          .slideY(begin: 0.1);
-                    }),
-                    if (_filteredSpares.isEmpty) _buildEmptyState(),
-                  ],
+          Column(
+            children: [
+              _buildHeader(),
+              Expanded(
+                child: RefreshIndicator(
+                  onRefresh: _fetchSpares,
+                  child: SingleChildScrollView(
+                    physics: const AlwaysScrollableScrollPhysics(),
+                    padding: EdgeInsets.fromLTRB(
+                      16,
+                      16,
+                      16,
+                      _cartItems.isEmpty ? 80 : 140,
+                    ),
+                    child: Column(
+                      children: [
+                        _buildInfoBanner().animate().fadeIn().slideY(
+                          begin: 0.1,
+                        ),
+                        const SizedBox(height: 16),
+                        ..._filteredSpares.asMap().entries.map((entry) {
+                          return _buildSpareCard(entry.value)
+                              .animate()
+                              .fadeIn(delay: (entry.key * 100).ms)
+                              .slideY(begin: 0.1);
+                        }),
+                        if (_filteredSpares.isEmpty) _buildEmptyState(),
+                      ],
+                    ),
+                  ),
                 ),
               ),
-            ),
+              if (_cartItems.isNotEmpty) _buildCartBar(),
+            ],
           ),
-          if (_cartItems.isNotEmpty) _buildCartBar(),
+          _buildTopNoticeOverlay(),
         ],
       ),
     );
@@ -1609,6 +1816,10 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
     final key = _spareKey(spare);
     final cartQty = _cartQuantities[key] ?? 0;
     final selectedMode = _cartPricingModes[key] ?? '';
+    final selectedUnitPrice = selectedMode.isNotEmpty
+        ? _unitPriceByMode(spare, selectedMode)
+        : 0.0;
+    final selectedLineTotal = selectedUnitPrice * cartQty;
 
     final storeName = (spare['store_name'] ?? '').toString().trim();
     final distanceRaw = spare['distance_km'];
@@ -1841,90 +2052,84 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
               ),
             ),
             const SizedBox(height: 10),
-            Row(
-              children: [
-                Tooltip(
-                  message: cartQty > 0
-                      ? context.tr('spares_add_to_cart_plus_one')
-                      : context.tr('add_to_cart'),
-                  child: SizedBox(
-                    width: 48,
-                    height: 48,
-                    child: ElevatedButton(
-                      onPressed: _isSubmitting
-                          ? null
-                          : () => _addSpareToCart(spare),
-                      style: ElevatedButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        foregroundColor: Colors.white,
-                        padding: EdgeInsets.zero,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
+            AnimatedSwitcher(
+              duration: const Duration(milliseconds: 220),
+              child: cartQty <= 0
+                  ? SizedBox(
+                      key: ValueKey<String>('add_$key'),
+                      width: double.infinity,
+                      child: ElevatedButton.icon(
+                        onPressed: _isSubmitting
+                            ? null
+                            : () => _addSpareToCart(spare),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primary,
+                          foregroundColor: Colors.white,
+                          minimumSize: const Size(double.infinity, 48),
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
                         ),
+                        icon: const Icon(
+                          Icons.shopping_cart_outlined,
+                          size: 18,
+                        ),
+                        label: Text(context.tr('add_to_cart')),
                       ),
-                      child: Icon(
-                        cartQty > 0
-                            ? Icons.add_shopping_cart
-                            : Icons.shopping_cart_outlined,
-                        size: 20,
+                    )
+                  : Container(
+                      key: ValueKey<String>('selected_$key'),
+                      padding: const EdgeInsets.all(12),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFFFFFBF0),
+                        borderRadius: BorderRadius.circular(14),
+                        border: Border.all(color: const Color(0xFFF3E1A4)),
+                      ),
+                      child: Row(
+                        children: [
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  _spareModeLabel(selectedMode),
+                                  style: const TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w700,
+                                    color: AppColors.gray800,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: _buildCartPriceStat(
+                                        label: context.tr(
+                                          'spares_unit_price_label',
+                                        ),
+                                        amount: selectedUnitPrice,
+                                      ),
+                                    ),
+                                    const SizedBox(width: 12),
+                                    Expanded(
+                                      child: _buildCartPriceStat(
+                                        label: context.tr(
+                                          'spares_line_total_label',
+                                        ),
+                                        amount: selectedLineTotal,
+                                        emphasized: true,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ],
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          _buildQuantityControl(key: key, quantity: cartQty),
+                        ],
                       ),
                     ),
-                  ),
-                ),
-                if (cartQty > 0) ...[
-                  const SizedBox(width: 8),
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 8,
-                      vertical: 4,
-                    ),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFF9FAFB),
-                      borderRadius: BorderRadius.circular(10),
-                      border: Border.all(color: AppColors.gray200),
-                    ),
-                    child: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        InkWell(
-                          onTap: () => _changeCartQuantity(key, -1),
-                          borderRadius: BorderRadius.circular(999),
-                          child: const Padding(
-                            padding: EdgeInsets.all(3),
-                            child: Icon(
-                              Icons.remove_circle,
-                              color: Colors.red,
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: Text(
-                            '$cartQty',
-                            style: const TextStyle(
-                              fontSize: 13,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ),
-                        InkWell(
-                          onTap: () => _changeCartQuantity(key, 1),
-                          borderRadius: BorderRadius.circular(999),
-                          child: const Padding(
-                            padding: EdgeInsets.all(3),
-                            child: Icon(
-                              Icons.add_circle,
-                              color: AppColors.primary,
-                              size: 18,
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ],
-              ],
             ),
           ],
         ),
@@ -1965,7 +2170,7 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
                   final unit = _unitPriceByMode(spare, mode);
 
                   return Container(
-                    width: 210,
+                    width: 252,
                     padding: const EdgeInsets.symmetric(
                       horizontal: 10,
                       vertical: 8,
@@ -2003,50 +2208,37 @@ class _AllSparesScreenState extends State<AllSparesScreen> {
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                               ),
-                              const SizedBox(height: 2),
-                              SaudiRiyalText(
-                                text: (unit * qty).toStringAsFixed(2),
-                                style: const TextStyle(
-                                  fontSize: 11,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.primary,
-                                ),
-                                iconSize: 11,
+                              const SizedBox(height: 8),
+                              Row(
+                                children: [
+                                  Expanded(
+                                    child: _buildCartPriceStat(
+                                      label: context.tr(
+                                        'spares_unit_price_label',
+                                      ),
+                                      amount: unit,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  Expanded(
+                                    child: _buildCartPriceStat(
+                                      label: context.tr(
+                                        'spares_line_total_label',
+                                      ),
+                                      amount: unit * qty,
+                                      emphasized: true,
+                                    ),
+                                  ),
+                                ],
                               ),
                             ],
                           ),
                         ),
                         const SizedBox(width: 8),
-                        Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            InkWell(
-                              onTap: () => _changeCartQuantity(key, 1),
-                              child: const Icon(
-                                Icons.add_circle,
-                                color: AppColors.primary,
-                                size: 18,
-                              ),
-                            ),
-                            Padding(
-                              padding: const EdgeInsets.symmetric(vertical: 2),
-                              child: Text(
-                                '$qty',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  fontSize: 12,
-                                ),
-                              ),
-                            ),
-                            InkWell(
-                              onTap: () => _changeCartQuantity(key, -1),
-                              child: const Icon(
-                                Icons.remove_circle,
-                                color: Colors.red,
-                                size: 18,
-                              ),
-                            ),
-                          ],
+                        _buildQuantityControl(
+                          key: key,
+                          quantity: qty,
+                          compact: true,
                         ),
                       ],
                     ),

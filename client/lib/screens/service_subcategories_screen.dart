@@ -172,10 +172,13 @@ class _ServiceSubcategoriesScreenState
       ),
       child: mediaUrl == null
           ? Center(
-              child: Text(
-                icon.isNotEmpty ? icon : '📁',
-                style: const TextStyle(fontSize: 20),
-              ),
+              child: icon.isNotEmpty
+                  ? Text(icon, style: const TextStyle(fontSize: 20))
+                  : const Icon(
+                      Icons.category_outlined,
+                      color: AppColors.primary,
+                      size: 24,
+                    ),
             )
           : ClipRRect(
               borderRadius: BorderRadius.circular(16),
@@ -183,10 +186,13 @@ class _ServiceSubcategoriesScreenState
                 imageUrl: mediaUrl,
                 fit: BoxFit.cover,
                 errorWidget: (_, __, ___) => Center(
-                  child: Text(
-                    icon.isNotEmpty ? icon : '📁',
-                    style: const TextStyle(fontSize: 20),
-                  ),
+                  child: icon.isNotEmpty
+                      ? Text(icon, style: const TextStyle(fontSize: 20))
+                      : const Icon(
+                          Icons.category_outlined,
+                          color: AppColors.primary,
+                          size: 24,
+                        ),
                 ),
               ),
             ),

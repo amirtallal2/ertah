@@ -20,6 +20,7 @@ require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../helpers/response.php';
 require_once __DIR__ . '/../../includes/functions.php';
 require_once __DIR__ . '/../../includes/notification_service.php';
+require_once __DIR__ . '/../../includes/complaint_support.php';
 
 require_once __DIR__ . '/../helpers/jwt.php';
 
@@ -67,43 +68,12 @@ switch ($action) {
 
 function getTableColumnMeta($tableName)
 {
-    global $conn;
-
-    $meta = [];
-    $table = $conn->real_escape_string($tableName);
-    $result = $conn->query("SHOW COLUMNS FROM `{$table}`");
-    if (!$result) {
-        return $meta;
-    }
-
-    while ($row = $result->fetch_assoc()) {
-        $meta[$row['Field']] = [
-            'nullable' => ($row['Null'] ?? 'YES') === 'YES',
-            'default' => $row['Default'] ?? null,
-        ];
-    }
-
-    return $meta;
+    return complaintSupportColumnsMeta((string) $tableName);
 }
 
 function ensureComplaintRepliesSchema()
 {
-    global $conn;
-
-    $conn->query(
-        "CREATE TABLE IF NOT EXISTS `complaint_replies` (
-            `id` INT AUTO_INCREMENT PRIMARY KEY,
-            `complaint_id` INT NOT NULL,
-            `user_id` INT NULL,
-            `admin_id` INT NULL,
-            `message` TEXT NOT NULL,
-            `attachments` LONGTEXT NULL,
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            INDEX `idx_complaint_replies_complaint` (`complaint_id`),
-            INDEX `idx_complaint_replies_user` (`user_id`),
-            INDEX `idx_complaint_replies_admin` (`admin_id`)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4"
-    );
+    complaintSupportEnsureRepliesSchema();
 }
 
 function normalizeUploadedFiles($fieldName)
@@ -397,7 +367,7 @@ function getComplaintDetails($userId)
     if (!empty($replyColumnsMeta)) {
         $selectColumns = [
             'r.id',
-            'r.message',
+            complaintSupportReplyMessageSelectSql($replyColumnsMeta, 'r'),
             'r.created_at',
             isset($replyColumnsMeta['user_id']) ? 'r.user_id' : 'NULL AS user_id',
             isset($replyColumnsMeta['admin_id']) ? 'r.admin_id' : 'NULL AS admin_id',
@@ -449,7 +419,7 @@ function getComplaintDetails($userId)
 
                 $replies[] = [
                     'id' => (int) ($row['id'] ?? 0),
-                    'message' => trim((string) ($row['message'] ?? '')),
+                    'message' => trim((string) ($row['reply_message'] ?? $row['message'] ?? '')),
                     'sender_type' => $senderType,
                     'sender_name' => $senderName,
                     'attachments' => mapAttachmentUrls($row['attachments'] ?? null),
@@ -519,51 +489,24 @@ function replyComplaint($userId)
         sendError('Replies table is missing or inaccessible', 500);
     }
 
-    $fields = ['complaint_id'];
-    $placeholders = ['?'];
-    $types = 'i';
-    $values = [$complaintId];
+    $replyData = complaintSupportBuildReplyInsertData(
+        $columnsMeta,
+        [
+            'complaint_id' => $complaintId,
+            'user_id' => $userId,
+            'admin_id' => null,
+            'sender_type' => 'user',
+            'message' => $message,
+            'attachment_paths' => $attachmentPaths,
+        ]
+    );
 
-    if (isset($columnsMeta['user_id'])) {
-        $fields[] = 'user_id';
-        $placeholders[] = '?';
-        $types .= 'i';
-        $values[] = $userId;
+    if (empty($replyData) || empty($replyData['complaint_id'])) {
+        sendError('Replies table schema is incomplete', 500);
     }
 
-    if (isset($columnsMeta['sender_type'])) {
-        $fields[] = 'sender_type';
-        $placeholders[] = '?';
-        $types .= 's';
-        $values[] = 'user';
-    }
-
-    $fields[] = 'message';
-    $placeholders[] = '?';
-    $types .= 's';
-    $values[] = $message;
-
-    if (isset($columnsMeta['attachments']) && !empty($attachmentPaths)) {
-        $fields[] = 'attachments';
-        $placeholders[] = '?';
-        $types .= 's';
-        $values[] = json_encode(array_values($attachmentPaths), JSON_UNESCAPED_UNICODE);
-    }
-
-    if (isset($columnsMeta['created_at']) && $columnsMeta['created_at']['default'] === null) {
-        $fields[] = 'created_at';
-        $placeholders[] = 'NOW()';
-    }
-
-    $insertSql = "INSERT INTO complaint_replies (" . implode(', ', $fields) . ") VALUES (" . implode(', ', $placeholders) . ")";
-    $stmt = $conn->prepare($insertSql);
-    if (!$stmt) {
-        sendError('Failed to prepare reply insert: ' . $conn->error, 500);
-    }
-
-    $stmt->bind_param($types, ...$values);
-
-    if ($stmt->execute()) {
+    try {
+        db()->insert('complaint_replies', $replyData);
         $complaintColumnsMeta = getTableColumnMeta('complaints');
         if (!empty($complaintColumnsMeta)) {
             $updates = [];
@@ -584,7 +527,7 @@ function replyComplaint($userId)
             'message' => 'Reply added successfully',
             'attachments' => mapAttachmentUrls($attachmentPaths),
         ]);
-    } else {
-        sendError('Failed to add reply: ' . $stmt->error, 500);
+    } catch (Throwable $e) {
+        sendError('Failed to add reply: ' . $e->getMessage(), 500);
     }
 }

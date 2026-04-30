@@ -17,11 +17,13 @@ import '../services/app_localizations.dart';
 class LocationPickerScreen extends StatefulWidget {
   final Function(Map<String, dynamic>)? onComplete;
   final bool returnDataOnly;
+  final bool persistSelection;
 
   const LocationPickerScreen({
     super.key,
     this.onComplete,
     this.returnDataOnly = false,
+    this.persistSelection = true,
   });
 
   @override
@@ -439,29 +441,29 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
     final safeAddress = _resolvedAddressOrFallback();
 
     try {
-      // Update Global State
-      await context.read<LocationProvider>().updateLocation(
-        address: safeAddress,
-        position: _currentPosition,
-        countryCode: _currentCountryCode,
-        cityName: _currentCityName,
-        villageName: _currentVillageName,
-      );
-
-      // Attempt to save to backend (if logged in)
-      try {
-        await _addressesService.addAddress(
-          title: definedLocationLabel,
+      if (widget.persistSelection) {
+        await context.read<LocationProvider>().updateLocation(
           address: safeAddress,
-          lat: _currentPosition.latitude,
-          lng: _currentPosition.longitude,
-          notes: '',
+          position: _currentPosition,
           countryCode: _currentCountryCode,
           cityName: _currentCityName,
           villageName: _currentVillageName,
         );
-      } catch (_) {
-        // Ignore backend errors for now, main goal is flow
+
+        try {
+          await _addressesService.addAddress(
+            title: definedLocationLabel,
+            address: safeAddress,
+            lat: _currentPosition.latitude,
+            lng: _currentPosition.longitude,
+            notes: '',
+            countryCode: _currentCountryCode,
+            cityName: _currentCityName,
+            villageName: _currentVillageName,
+          );
+        } catch (_) {
+          // Ignore backend errors for now, main goal is flow
+        }
       }
 
       if (!mounted) return;
@@ -483,16 +485,18 @@ class _LocationPickerScreenState extends State<LocationPickerScreen> {
         Navigator.pop(context, data);
       }
 
-      messenger?.showSnackBar(
-        SnackBar(
-          content: Text(locationSavedMessage),
-          backgroundColor: const Color(0xFFFBCC26),
-          behavior: SnackBarBehavior.floating,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(10),
+      if (widget.persistSelection) {
+        messenger?.showSnackBar(
+          SnackBar(
+            content: Text(locationSavedMessage),
+            backgroundColor: const Color(0xFFFBCC26),
+            behavior: SnackBarBehavior.floating,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10),
+            ),
           ),
-        ),
-      );
+        );
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() => _isSaving = false);

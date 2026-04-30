@@ -12,6 +12,7 @@ import '../utils/order_tracking_navigation.dart';
 import '../widgets/guest_guard.dart';
 import 'location_picker_screen.dart';
 import 'payment_screen.dart';
+import 'static_content_page_screen.dart';
 
 class ContainerRequestScreen extends StatefulWidget {
   final ServiceCategoryModel service;
@@ -33,7 +34,6 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
   final OrdersService _ordersService = OrdersService();
   final ImagePicker _picker = ImagePicker();
 
-  final TextEditingController _siteCityController = TextEditingController();
   final TextEditingController _purposeController = TextEditingController();
   final TextEditingController _estimatedWeightController =
       TextEditingController();
@@ -44,6 +44,7 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
   final List<XFile> _media = [];
 
   Map<String, dynamic>? _addressData;
+  List<int> _selectedServiceIds = [];
   int? _selectedServiceId;
   DateTime? _startDate;
   DateTime? _endDate;
@@ -57,17 +58,26 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
   @override
   void initState() {
     super.initState();
-    _initializeSelectedService();
+    _initializeSelectedServices();
   }
 
   @override
   void dispose() {
-    _siteCityController.dispose();
     _purposeController.dispose();
     _estimatedWeightController.dispose();
     _estimatedDistanceController.dispose();
     _notesController.dispose();
     super.dispose();
+  }
+
+  void _openTermsPage() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            const StaticContentPageScreen(page: StaticContentPageKey.terms),
+      ),
+    );
   }
 
   int? _toInt(dynamic value) {
@@ -83,13 +93,80 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
 
   String _toStr(dynamic value) => value?.toString() ?? '';
 
+  List<int> _normalizeServiceIds(Iterable<dynamic> values) {
+    final ids = <int>[];
+    for (final value in values) {
+      final id = _toInt(value);
+      if (id != null && id > 0 && !ids.contains(id)) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }
+
   double get _estimatedWeightKg =>
       double.tryParse(_estimatedWeightController.text.trim()) ?? 0;
 
   double get _estimatedDistanceMeters =>
       double.tryParse(_estimatedDistanceController.text.trim()) ?? 0;
 
-  double _calculateEstimatedPrice(Map<String, dynamic> selectedService) {
+  void _initializeSelectedServices() {
+    final matchedIds = _normalizeServiceIds(widget.preselectedServiceIds)
+        .where(
+          (id) =>
+              widget.availableServices.any((item) => _toInt(item['id']) == id),
+        )
+        .toList();
+
+    if (matchedIds.isNotEmpty) {
+      _selectedServiceIds = matchedIds;
+      _selectedServiceId = matchedIds.first;
+      return;
+    }
+
+    if (widget.availableServices.length == 1) {
+      final onlyId = _toInt(widget.availableServices.first['id']);
+      if (onlyId != null) {
+        _selectedServiceIds = [onlyId];
+        _selectedServiceId = onlyId;
+      }
+    }
+  }
+
+  Map<String, dynamic> _serviceById(int? serviceId) {
+    if (serviceId == null || serviceId <= 0) {
+      return <String, dynamic>{};
+    }
+
+    return widget.availableServices.firstWhere(
+      (item) => _toInt(item['id']) == serviceId,
+      orElse: () => <String, dynamic>{},
+    );
+  }
+
+  List<Map<String, dynamic>> _selectedServiceRows() {
+    final rows = <Map<String, dynamic>>[];
+    for (final serviceId in _selectedServiceIds) {
+      final row = _serviceById(serviceId);
+      if (row.isNotEmpty) {
+        rows.add(row);
+      }
+    }
+    return rows;
+  }
+
+  int? get _primarySelectedServiceId {
+    if (_selectedServiceIds.isNotEmpty) {
+      return _selectedServiceIds.first;
+    }
+    return _selectedServiceId;
+  }
+
+  Map<String, dynamic> _selectedServiceRow() {
+    return _serviceById(_primarySelectedServiceId);
+  }
+
+  double _calculateServiceEstimatedPrice(Map<String, dynamic> selectedService) {
     final dailyPrice = _toDouble(selectedService['daily_price']);
     final weeklyPrice = _toDouble(selectedService['weekly_price']);
     final monthlyPrice = _toDouble(selectedService['monthly_price']);
@@ -119,6 +196,20 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
     return total;
   }
 
+  double _calculateEstimatedTotal(List<Map<String, dynamic>> selectedRows) {
+    if (selectedRows.isEmpty) {
+      final fallback = _selectedServiceRow();
+      if (fallback.isEmpty) return 0;
+      return _calculateServiceEstimatedPrice(fallback);
+    }
+
+    var total = 0.0;
+    for (final service in selectedRows) {
+      total += _calculateServiceEstimatedPrice(service);
+    }
+    return total;
+  }
+
   String _localizedServiceName(Map<String, dynamic> row) {
     final lang = Localizations.localeOf(context).languageCode;
     final ar = _toStr(row['name_ar']).trim();
@@ -129,31 +220,41 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
     return en.isNotEmpty ? en : ar;
   }
 
-  void _initializeSelectedService() {
-    if (widget.availableServices.isEmpty) return;
-
-    final preselected = widget.preselectedServiceIds.isNotEmpty
-        ? widget.preselectedServiceIds.first
-        : null;
-
-    if (preselected != null &&
-        widget.availableServices.any(
-          (item) => _toInt(item['id']) == preselected,
-        )) {
-      _selectedServiceId = preselected;
-      return;
+  String _selectedServicesTitle(List<Map<String, dynamic>> selectedRows) {
+    if (selectedRows.isEmpty) {
+      final fallback = _selectedServiceRow();
+      if (fallback.isEmpty) return context.tr('container_service');
+      return _localizedServiceName(fallback);
     }
 
-    if (widget.availableServices.length == 1) {
-      _selectedServiceId = _toInt(widget.availableServices.first['id']);
-    }
+    return selectedRows.map(_localizedServiceName).join('، ');
+  }
+
+  String _serviceChipLabel(Map<String, dynamic> row) {
+    final name = _localizedServiceName(row);
+    final size = _toStr(row['container_size']).trim();
+    if (size.isEmpty) return name;
+    return '$name ($size)';
+  }
+
+  String _addressText(Map<String, dynamic>? data) {
+    if (data == null) return '';
+    return (data['address'] ?? '').toString().trim();
+  }
+
+  String _addressCity(Map<String, dynamic>? data) {
+    if (data == null) return '';
+    return (data['city_name'] ?? data['city'] ?? '').toString().trim();
   }
 
   Future<void> _pickAddress() async {
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => const LocationPickerScreen(returnDataOnly: true),
+        builder: (context) => const LocationPickerScreen(
+          returnDataOnly: true,
+          persistSelection: false,
+        ),
       ),
     );
 
@@ -200,46 +301,83 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
     );
   }
 
+  DateTime _dateOnly(DateTime value) {
+    return DateTime(value.year, value.month, value.day);
+  }
+
+  DateTime _minimumEndDateFor(DateTime startDate) {
+    return _dateOnly(startDate).add(const Duration(days: 1));
+  }
+
+  void _syncRentalDurationFromDates() {
+    if (_startDate == null || _endDate == null) return;
+
+    final start = _dateOnly(_startDate!);
+    var end = _dateOnly(_endDate!);
+    if (!end.isAfter(start)) {
+      end = _minimumEndDateFor(start);
+      _endDate = end;
+    }
+
+    _startDate = start;
+    _durationDays = end.difference(start).inDays.clamp(1, 365).toInt();
+  }
+
   Future<void> _pickDate({required bool isStart}) async {
-    final now = DateTime.now();
-    final initial = isStart
-        ? (_startDate ?? now)
-        : (_endDate ?? _startDate ?? now.add(const Duration(days: 1)));
+    final today = _dateOnly(DateTime.now());
+    final firstDate = isStart
+        ? today
+        : (_startDate == null
+              ? today.add(const Duration(days: 1))
+              : _minimumEndDateFor(_startDate!));
+    final lastDate = today.add(Duration(days: isStart ? 180 : 365));
+    var initial = isStart
+        ? (_startDate ?? today)
+        : (_endDate ??
+              (_startDate == null
+                  ? today.add(const Duration(days: 1))
+                  : _minimumEndDateFor(_startDate!)));
+    initial = _dateOnly(initial);
+    if (initial.isBefore(firstDate)) {
+      initial = firstDate;
+    }
+    if (initial.isAfter(lastDate)) {
+      initial = lastDate;
+    }
 
     final picked = await showDatePicker(
       context: context,
       initialDate: initial,
-      firstDate: now,
-      lastDate: now.add(const Duration(days: 180)),
+      firstDate: firstDate,
+      lastDate: lastDate,
     );
 
     if (picked == null) return;
 
     setState(() {
       if (isStart) {
-        _startDate = picked;
-        if (_endDate != null && _endDate!.isBefore(picked)) {
-          _endDate = picked;
+        final previousDuration = _durationDays.clamp(1, 365).toInt();
+        final start = _dateOnly(picked);
+        _startDate = start;
+        if (_endDate == null || !_dateOnly(_endDate!).isAfter(start)) {
+          _endDate = start.add(Duration(days: previousDuration));
         }
       } else {
-        _endDate = picked;
+        _endDate = _dateOnly(picked);
       }
-      if (_startDate != null && _endDate != null) {
-        final days = _endDate!.difference(_startDate!).inDays + 1;
-        _durationDays = days > 0 ? days : 1;
-      }
+      _syncRentalDurationFromDates();
     });
   }
 
   bool _validate() {
-    if (widget.availableServices.isNotEmpty && _selectedServiceId == null) {
+    if (widget.availableServices.isNotEmpty && _selectedServiceIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(context.tr('container_type_required'))),
       );
       return false;
     }
 
-    if ((_addressData?['address'] ?? '').toString().trim().isEmpty) {
+    if (_addressText(_addressData).isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(context.tr('select_address_error'))),
       );
@@ -253,7 +391,6 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
       return false;
     }
 
-    // Orders API requires media for custom service requests.
     if (_media.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(context.tr('container_media_required'))),
@@ -271,14 +408,6 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
     return true;
   }
 
-  Map<String, dynamic> _selectedServiceRow() {
-    if (_selectedServiceId == null) return <String, dynamic>{};
-    return widget.availableServices.firstWhere(
-      (item) => _toInt(item['id']) == _selectedServiceId,
-      orElse: () => <String, dynamic>{},
-    );
-  }
-
   Future<void> _submit() async {
     final canProceed = await checkGuestAndShowDialog(context);
     if (!mounted || !canProceed) return;
@@ -287,13 +416,13 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
 
     setState(() => _isSubmitting = true);
     try {
-      final selectedService = _selectedServiceRow();
-      final selectedServiceName = selectedService.isNotEmpty
-          ? _localizedServiceName(selectedService)
-          : context.tr('container_service');
-      final estimatedAmount = _calculateEstimatedPrice(selectedService);
+      final selectedRows = _selectedServiceRows();
+      final primaryService = _selectedServiceRow();
+      final selectedServiceName = _selectedServicesTitle(selectedRows);
+      final estimatedAmount = _calculateEstimatedTotal(selectedRows);
 
-      final address = (_addressData?['address'] ?? '').toString().trim();
+      final address = _addressText(_addressData);
+      final cityName = _addressCity(_addressData);
       final lat = double.tryParse('${_addressData?['lat'] ?? ''}');
       final lng = double.tryParse('${_addressData?['lng'] ?? ''}');
       final countryCode = (_addressData?['country_code'] ?? '')
@@ -301,24 +430,45 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
           .trim()
           .toUpperCase();
 
+      final selectedServicesPayload = selectedRows.map((row) {
+        return {
+          'id': _toInt(row['id']),
+          'name_ar': _toStr(row['name_ar']),
+          'name_en': _toStr(row['name_en']),
+          'container_size': _toStr(row['container_size']),
+          'daily_price': _toDouble(row['daily_price']),
+          'weekly_price': _toDouble(row['weekly_price']),
+          'monthly_price': _toDouble(row['monthly_price']),
+          'delivery_fee': _toDouble(row['delivery_fee']),
+          'price_per_kg': _toDouble(row['price_per_kg']),
+          'price_per_meter': _toDouble(row['price_per_meter']),
+          'minimum_charge': _toDouble(row['minimum_charge']),
+        };
+      }).toList();
+
       final payload = <String, dynamic>{
         'type': 'container_rental',
         'module': 'container_rental',
+        'selected_services': selectedServicesPayload,
+        'service_type_ids': _selectedServiceIds,
+        'sub_services': _selectedServiceIds,
         'user_desc': _notesController.text.trim(),
         'container_request': {
-          'container_service_id': _selectedServiceId,
+          'container_service_id': _primarySelectedServiceId,
+          'selected_service_ids': _selectedServiceIds,
+          'selected_services': selectedServicesPayload,
           'container_service_name': selectedServiceName,
-          'container_size': _toStr(selectedService['container_size']),
-          'capacity_ton': selectedService['capacity_ton'],
+          'container_size': _toStr(primaryService['container_size']),
+          'capacity_ton': primaryService['capacity_ton'],
           'daily_price':
-              selectedService['daily_price'] ?? selectedService['price'],
-          'weekly_price': selectedService['weekly_price'],
-          'monthly_price': selectedService['monthly_price'],
-          'delivery_fee': selectedService['delivery_fee'],
-          'price_per_kg': selectedService['price_per_kg'],
-          'price_per_meter': selectedService['price_per_meter'],
-          'minimum_charge': selectedService['minimum_charge'],
-          'site_city': _siteCityController.text.trim(),
+              primaryService['daily_price'] ?? primaryService['price'],
+          'weekly_price': primaryService['weekly_price'],
+          'monthly_price': primaryService['monthly_price'],
+          'delivery_fee': primaryService['delivery_fee'],
+          'price_per_kg': primaryService['price_per_kg'],
+          'price_per_meter': primaryService['price_per_meter'],
+          'minimum_charge': primaryService['minimum_charge'],
+          'site_city': cityName,
           'site_address': address,
           'start_date': _startDate != null
               ? DateFormat('yyyy-MM-dd').format(_startDate!)
@@ -334,9 +484,7 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
           'estimated_distance_meters': _estimatedDistanceMeters > 0
               ? _estimatedDistanceMeters
               : null,
-          'estimated_price': _calculateEstimatedPrice(
-            selectedService,
-          ).toStringAsFixed(2),
+          'estimated_price': estimatedAmount.toStringAsFixed(2),
           'needs_loading_help': _needsLoadingHelp,
           'needs_operator': _needsOperator,
           'purpose': _purposeController.text.trim(),
@@ -356,6 +504,7 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
             : null,
         mediaFiles: _media.map((item) => item.path).toList(),
         problemDetails: payload,
+        serviceIds: _selectedServiceIds.isNotEmpty ? _selectedServiceIds : null,
         isCustomService: true,
         customServiceTitle:
             '${context.tr('container_request_title')} - $selectedServiceName',
@@ -412,6 +561,9 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
                     categoryIcon:
                         (createdOrder['category_icon'] ?? widget.service.icon)
                             .toString(),
+                    categoryImage:
+                        (createdOrder['category_image'] ?? widget.service.image)
+                            .toString(),
                   );
                 });
               },
@@ -428,7 +580,7 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -443,12 +595,72 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
     }
   }
 
+  Widget _buildSelectedServicesCard() {
+    final selectedRows = _selectedServiceRows();
+    if (selectedRows.isEmpty && widget.availableServices.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: AppShadows.sm,
+      ),
+      child: selectedRows.isNotEmpty
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  context.tr('service_request_selected_services'),
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: selectedRows.map((row) {
+                    return Chip(
+                      label: Text(
+                        _serviceChipLabel(row),
+                        style: const TextStyle(color: Colors.black),
+                      ),
+                      backgroundColor: AppColors.primary.withValues(
+                        alpha: 0.12,
+                      ),
+                      side: BorderSide.none,
+                    );
+                  }).toList(),
+                ),
+              ],
+            )
+          : DropdownButtonFormField<int>(
+              initialValue: _selectedServiceId,
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                labelText: context.tr('container_type_label'),
+              ),
+              items: widget.availableServices.map((row) {
+                final serviceId = _toInt(row['id']);
+                return DropdownMenuItem<int>(
+                  value: serviceId,
+                  child: Text(_localizedServiceName(row)),
+                );
+              }).toList(),
+              onChanged: (value) {
+                setState(() {
+                  _selectedServiceId = value;
+                  _selectedServiceIds = value != null ? [value] : <int>[];
+                });
+              },
+            ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
-    final selectedService = _selectedServiceRow();
-    final selectedServiceName = selectedService.isNotEmpty
-        ? _localizedServiceName(selectedService)
-        : context.tr('not_specified');
+    final selectedRows = _selectedServiceRows();
 
     return Scaffold(
       backgroundColor: AppColors.gray50,
@@ -463,62 +675,10 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
           children: [
             Text(
               context.tr('container_request_details'),
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             const SizedBox(height: 12),
-            if (widget.availableServices.isNotEmpty)
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: AppShadows.sm,
-                ),
-                child: DropdownButtonFormField<int>(
-                  initialValue: _selectedServiceId,
-                  decoration: InputDecoration(
-                    border: InputBorder.none,
-                    labelText: context.tr('container_type_label'),
-                  ),
-                  items: widget.availableServices.map((row) {
-                    final serviceId = _toInt(row['id']);
-                    return DropdownMenuItem<int>(
-                      value: serviceId,
-                      child: Text(_localizedServiceName(row)),
-                    );
-                  }).toList(),
-                  onChanged: (value) =>
-                      setState(() => _selectedServiceId = value),
-                ),
-              ),
-            if (selectedService.isNotEmpty) ...[
-              const SizedBox(height: 10),
-              Container(
-                padding: const EdgeInsets.all(10),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(12),
-                  boxShadow: AppShadows.sm,
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      selectedServiceName,
-                      style: const TextStyle(fontWeight: FontWeight.bold),
-                    ),
-                    const SizedBox(height: 4),
-                    Text(
-                      '${context.tr('container_size_label')}: ${_toStr(selectedService['container_size']).isEmpty ? '-' : _toStr(selectedService['container_size'])}',
-                      style: const TextStyle(
-                        color: AppColors.gray600,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
+            _buildSelectedServicesCard(),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
@@ -529,21 +689,20 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
               ),
               child: Column(
                 children: [
-                  TextField(
-                    controller: _siteCityController,
-                    decoration: InputDecoration(
-                      labelText: context.tr('city'),
-                      border: InputBorder.none,
-                    ),
-                  ),
-                  const Divider(height: 1),
                   ListTile(
                     contentPadding: EdgeInsets.zero,
                     leading: const Icon(Icons.location_on_outlined),
                     title: Text(
-                      (_addressData?['address'] ?? '').toString().trim().isEmpty
+                      _addressText(_addressData).isEmpty
                           ? context.tr('container_install_address_label')
-                          : (_addressData?['address']).toString(),
+                          : _addressText(_addressData),
+                    ),
+                    subtitle: Text(
+                      _addressCity(_addressData).isNotEmpty
+                          ? _addressCity(_addressData)
+                          : context.tr(
+                              'service_request_add_new_address_from_map',
+                            ),
                     ),
                     trailing: const Icon(Icons.edit_location_alt_outlined),
                     onTap: _pickAddress,
@@ -586,7 +745,8 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
                     ),
                     onChanged: (_) => setState(() {}),
                   ),
-                  if (selectedService.isNotEmpty) ...[
+                  if (selectedRows.isNotEmpty ||
+                      _selectedServiceRow().isNotEmpty) ...[
                     const Divider(height: 16),
                     Align(
                       alignment: Alignment.centerRight,
@@ -595,8 +755,8 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
                             .tr('initial_estimate_with_value')
                             .replaceAll(
                               '{value}',
-                              _calculateEstimatedPrice(
-                                selectedService,
+                              _calculateEstimatedTotal(
+                                selectedRows,
                               ).toStringAsFixed(2),
                             )
                             .replaceAll('{currency}', context.tr('sar')),
@@ -641,27 +801,18 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
                     ),
                     onTap: () => _pickDate(isStart: false),
                   ),
-                  const Divider(height: 1),
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Text(
-                          context.tr('container_rental_duration_days'),
-                        ),
+                  if (_startDate != null && _endDate != null) ...[
+                    const Divider(height: 1),
+                    ListTile(
+                      contentPadding: EdgeInsets.zero,
+                      leading: const Icon(Icons.timelapse_outlined),
+                      title: Text(context.tr('container_rental_duration_days')),
+                      trailing: Text(
+                        '$_durationDays',
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
-                      IconButton(
-                        onPressed: _durationDays > 1
-                            ? () => setState(() => _durationDays--)
-                            : null,
-                        icon: const Icon(Icons.remove_circle_outline),
-                      ),
-                      Text('$_durationDays'),
-                      IconButton(
-                        onPressed: () => setState(() => _durationDays++),
-                        icon: const Icon(Icons.add_circle_outline),
-                      ),
-                    ],
-                  ),
+                    ),
+                  ],
                   const Divider(height: 1),
                   Row(
                     children: [
@@ -829,7 +980,21 @@ class _ContainerRequestScreenState extends State<ContainerRequestScreen> {
                       setState(() => _agreedToTerms = value ?? false),
                   activeColor: AppColors.primary,
                 ),
-                Expanded(child: Text(context.tr('agree_service_terms'))),
+                Expanded(
+                  child: InkWell(
+                    onTap: _openTermsPage,
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Text(
+                        context.tr('agree_service_terms'),
+                        style: const TextStyle(
+                          color: AppColors.gray700,
+                          decoration: TextDecoration.underline,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
               ],
             ),
             const SizedBox(height: 8),

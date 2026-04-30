@@ -557,6 +557,10 @@ function getAppSettings()
         'app_font' => normalizeAppFont($settings['app_font'] ?? 'cairo'),
         'available_fonts' => ['cairo', 'zain'],
         'onesignal_app_id' => $oneSignalAppId,
+        'darfix_ai' => [
+            'enabled' => toBoolSetting($settings['darfix_ai_enabled'] ?? null, true),
+        ],
+        'darfix_ai_enabled' => toBoolSetting($settings['darfix_ai_enabled'] ?? null, true),
     ]);
 }
 

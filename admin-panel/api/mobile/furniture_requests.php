@@ -398,16 +398,6 @@ function createFurnitureRequest(array $input): void
         }
     }
 
-    $areaId = (int) ($input['area_id'] ?? 0);
-    if ($areaId <= 0) {
-        sendError('يرجى اختيار المنطقة', 422);
-    }
-
-    $area = db()->fetch('SELECT id, name_ar FROM furniture_areas WHERE id = ? AND is_active = 1 LIMIT 1', [$areaId]);
-    if (!$area) {
-        sendError('المنطقة المختارة غير متاحة', 422);
-    }
-
     $customerName = trim((string) ($input['customer_name'] ?? ''));
     if ($customerName === '') {
         $customerName = trim((string) ($user['full_name'] ?? ''));
@@ -426,9 +416,50 @@ function createFurnitureRequest(array $input): void
 
     $pickupAddress = trim((string) ($input['pickup_address'] ?? ''));
     $dropoffAddress = trim((string) ($input['dropoff_address'] ?? ''));
+    $pickupCity = trim((string) ($input['pickup_city'] ?? ''));
+    $dropoffCity = trim((string) ($input['dropoff_city'] ?? ''));
 
     if ($pickupAddress === '' || $dropoffAddress === '') {
         sendError('يرجى إدخال عنوان التحميل وعنوان التنزيل', 422);
+    }
+
+    $areaId = (int) ($input['area_id'] ?? 0);
+    $area = null;
+
+    if ($areaId > 0) {
+        $area = db()->fetch(
+            'SELECT id, name_ar FROM furniture_areas WHERE id = ? AND is_active = 1 LIMIT 1',
+            [$areaId]
+        );
+        if (!$area) {
+            sendError('المنطقة المختارة غير متاحة', 422);
+        }
+    } elseif (specialServiceTableExists('furniture_areas')) {
+        if ($pickupCity !== '') {
+            $area = db()->fetch(
+                "SELECT id, name_ar
+                 FROM furniture_areas
+                 WHERE is_active = 1
+                   AND (name_ar = ? OR name_en = ? OR name_ur = ?)
+                 LIMIT 1",
+                [$pickupCity, $pickupCity, $pickupCity]
+            );
+        }
+
+        if (!$area) {
+            $area = db()->fetch(
+                "SELECT id, name_ar
+                 FROM furniture_areas
+                 WHERE is_active = 1
+                 ORDER BY sort_order ASC, id ASC
+                 LIMIT 1"
+            );
+        }
+    }
+
+    $areaName = trim((string) ($area['name_ar'] ?? ($pickupCity !== '' ? $pickupCity : '')));
+    if ($pickupCity === '' && $areaName !== '') {
+        $pickupCity = $areaName;
     }
 
     $moveDate = trim((string) ($input['move_date'] ?? ''));
@@ -548,13 +579,13 @@ function createFurnitureRequest(array $input): void
         'request_number' => $requestNumber,
         'user_id' => $userId,
         'service_id' => $serviceId > 0 ? $serviceId : null,
-        'area_id' => (int) $area['id'],
-        'area_name' => $area['name_ar'] ?? null,
+        'area_id' => !empty($area['id']) ? (int) $area['id'] : null,
+        'area_name' => $areaName !== '' ? $areaName : null,
         'customer_name' => $customerName,
         'phone' => $phone,
-        'pickup_city' => trim((string) ($input['pickup_city'] ?? ($area['name_ar'] ?? ''))),
+        'pickup_city' => $pickupCity !== '' ? $pickupCity : null,
         'pickup_address' => $pickupAddress,
-        'dropoff_city' => trim((string) ($input['dropoff_city'] ?? '')),
+        'dropoff_city' => $dropoffCity !== '' ? $dropoffCity : null,
         'dropoff_address' => $dropoffAddress,
         'move_date' => $moveDate !== '' ? $moveDate : null,
         'preferred_time' => $preferredTime !== '' ? $preferredTime : null,
@@ -611,7 +642,7 @@ function createFurnitureRequest(array $input): void
         'source_order_id' => $linkedOrderId,
         'status' => 'new',
         'status_label' => specialRequestStatusLabel('new'),
-        'area_name' => $area['name_ar'] ?? '',
+        'area_name' => $areaName,
         'estimated_price' => $estimatedPrice,
     ], 'تم إرسال طلب نقل العفش بنجاح');
 }

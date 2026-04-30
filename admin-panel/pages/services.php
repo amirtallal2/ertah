@@ -7,6 +7,7 @@
 require_once '../init.php';
 requireLogin();
 require_once '../includes/service_areas.php';
+require_once '../includes/inspection_pricing.php';
 
 // التحقق من الصلاحيات
 if (!hasPermission('services') && getCurrentAdmin()['role'] !== 'super_admin') {
@@ -60,6 +61,7 @@ function ensureServicesMultilingualSchema()
 
 ensureServicesMultilingualSchema();
 serviceAreaEnsureServiceLinksSchema();
+inspectionPricingEnsureSchema();
 
 function normalizeServiceAreaIds($raw): array
 {
@@ -131,6 +133,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($postAction === 'add' || $postAction === 'edit') {
         $categoryId = (int) post('category_id');
         $selectedAreaIds = normalizeServiceAreaIds($_POST['service_area_ids'] ?? []);
+        $inspectionMode = inspectionPricingNormalizeMode(post('inspection_pricing_mode'), true);
+        $inspectionFee = $inspectionMode === 'paid' ? inspectionPricingNormalizeFee(post('inspection_fee')) : 0.0;
         $data = [
             'name_ar' => clean(post('name_ar')),
             'name_en' => clean(post('name_en')),
@@ -140,6 +144,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'description_ur' => clean(post('description_ur')),
             'price' => (float) post('price'),
             'category_id' => $categoryId,
+            'inspection_pricing_mode' => $inspectionMode,
+            'inspection_fee' => $inspectionFee,
+            'inspection_details_ar' => clean(post('inspection_details_ar')),
+            'inspection_details_en' => clean(post('inspection_details_en')),
+            'inspection_details_ur' => clean(post('inspection_details_ur')),
             'is_active' => isset($_POST['is_active']) ? 1 : 0,
             'is_featured' => isset($_POST['is_featured']) ? 1 : 0
         ];
@@ -158,6 +167,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($categoryId <= 0) {
             setFlashMessage('danger', 'يرجى اختيار القسم');
+            redirect('services.php' . ($postAction === 'edit' ? '?action=edit&id=' . (int) post('id') : ''));
+        }
+
+        if ($inspectionMode === 'paid' && $inspectionFee <= 0) {
+            setFlashMessage('danger', 'يرجى إدخال رسوم معاينة صحيحة أكبر من صفر أو اختيار مجانية/حسب القسم');
             redirect('services.php' . ($postAction === 'edit' ? '?action=edit&id=' . (int) post('id') : ''));
         }
 
@@ -340,9 +354,10 @@ include '../includes/header.php';
                             <th>الاسم</th>
                             <th>القسم</th>
                             <th>المناطق</th>
-                            <th>النوع</th>
-                            <th>السعر</th>
-                            <th>الحالة</th>
+	                            <th>النوع</th>
+	                            <th>السعر</th>
+	                            <th>المعاينة</th>
+	                            <th>الحالة</th>
                             <th>مميزة</th>
                             <th>الإجراءات</th>
                         </tr>
@@ -405,10 +420,23 @@ include '../includes/header.php';
                                         <?php echo $isSubCategory ? 'قسم فرعي' : 'قسم رئيسي'; ?>
                                     </span>
                                 </td>
-                                <td>
-                                    <?php echo number_format($s['price'], 2); ?> ⃁
-                                </td>
-                                <td>
+	                                <td>
+	                                    <?php echo number_format($s['price'], 2); ?> ⃁
+	                                </td>
+	                                <td>
+	                                    <?php
+	                                        $serviceInspectionMode = inspectionPricingNormalizeMode($s['inspection_pricing_mode'] ?? 'inherit', true);
+	                                        $serviceInspectionFee = inspectionPricingNormalizeFee($s['inspection_fee'] ?? 0);
+	                                    ?>
+	                                    <?php if ($serviceInspectionMode === 'inherit'): ?>
+	                                        <span class="badge badge-secondary">حسب القسم</span>
+	                                    <?php elseif ($serviceInspectionMode === 'paid' && $serviceInspectionFee > 0): ?>
+	                                        <span class="badge badge-warning">مدفوعة: <?php echo number_format($serviceInspectionFee, 2); ?> ⃁</span>
+	                                    <?php else: ?>
+	                                        <span class="badge badge-success">مجانية</span>
+	                                    <?php endif; ?>
+	                                </td>
+	                                <td>
                                     <span class="badge <?php echo $s['is_active'] ? 'badge-success' : 'badge-danger'; ?>">
                                         <?php echo $s['is_active'] ? 'نشط' : 'غير نشط'; ?>
                                     </span>
@@ -434,7 +462,7 @@ include '../includes/header.php';
                         <?php endforeach; ?>
                         <?php if (empty($services)): ?>
                             <tr>
-                                <td colspan="9" class="text-center">لا توجد خدمات مضافة</td>
+	                                <td colspan="10" class="text-center">لا توجد خدمات مضافة</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>
@@ -519,10 +547,42 @@ include '../includes/header.php';
                         <textarea name="description_ur" class="form-control" rows="3"></textarea>
                     </div>
 
-                    <div class="form-group">
-                        <label class="form-label">صورة الخدمة (الغلاف)</label>
-                        <input type="file" name="image" class="form-control" accept="image/*">
-                    </div>
+	                    <div class="form-group">
+	                        <label class="form-label">صورة الخدمة (الغلاف)</label>
+	                        <input type="file" name="image" class="form-control" accept="image/*">
+	                    </div>
+
+	                    <div style="border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; margin-bottom: 14px;">
+	                        <h4 style="margin: 0 0 12px;">إعدادات المعاينة للخدمة</h4>
+	                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+	                            <div class="form-group">
+	                                <label class="form-label">طريقة احتساب المعاينة</label>
+	                                <select name="inspection_pricing_mode" class="form-control">
+	                                    <option value="inherit">حسب إعداد القسم</option>
+	                                    <option value="free">معاينة مجانية لهذه الخدمة</option>
+	                                    <option value="paid">معاينة برسوم لهذه الخدمة</option>
+	                                </select>
+	                            </div>
+	                            <div class="form-group">
+	                                <label class="form-label">رسوم المعاينة (⃁)</label>
+	                                <input type="number" step="0.01" min="0" name="inspection_fee" class="form-control" value="0">
+	                            </div>
+	                        </div>
+	                        <div class="form-group">
+	                            <label class="form-label">تفاصيل المعاينة بالعربي</label>
+	                            <textarea name="inspection_details_ar" class="form-control" rows="2" placeholder="تظهر للعميل عند طلب هذه الخدمة إذا كانت مدفوعة أو مخصصة."></textarea>
+	                        </div>
+	                        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+	                            <div class="form-group">
+	                                <label class="form-label">Details EN</label>
+	                                <textarea name="inspection_details_en" class="form-control" rows="2"></textarea>
+	                            </div>
+	                            <div class="form-group">
+	                                <label class="form-label">Details UR</label>
+	                                <textarea name="inspection_details_ur" class="form-control" rows="2"></textarea>
+	                            </div>
+	                        </div>
+	                    </div>
 
                     <div style="display: flex; gap: 20px;">
                         <div class="form-group">
@@ -629,18 +689,54 @@ include '../includes/header.php';
                         rows="3"><?php echo $service['description_ur'] ?? ''; ?></textarea>
                 </div>
 
-                <div class="form-group">
-                    <label class="form-label">صورة الخدمة</label>
+	                <div class="form-group">
+	                    <label class="form-label">صورة الخدمة</label>
                     <?php if ($service['image']): ?>
                         <div style="margin-bottom: 10px;">
                             <img src="<?php echo imageUrl($service['image']); ?>" alt=""
                                 style="width: 100px; object-fit: cover; border-radius: 5px;">
                         </div>
                     <?php endif; ?>
-                    <input type="file" name="image" class="form-control" accept="image/*">
-                </div>
+	                    <input type="file" name="image" class="form-control" accept="image/*">
+	                </div>
 
-                <div style="display: flex; gap: 20px;">
+	                <div style="border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; margin-bottom: 14px;">
+	                    <h4 style="margin: 0 0 12px;">إعدادات المعاينة للخدمة</h4>
+	                    <?php
+	                        $editInspectionMode = inspectionPricingNormalizeMode($service['inspection_pricing_mode'] ?? 'inherit', true);
+	                        $editInspectionFee = inspectionPricingNormalizeFee($service['inspection_fee'] ?? 0);
+	                    ?>
+	                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+	                        <div class="form-group">
+	                            <label class="form-label">طريقة احتساب المعاينة</label>
+	                            <select name="inspection_pricing_mode" class="form-control">
+	                                <option value="inherit" <?php echo $editInspectionMode === 'inherit' ? 'selected' : ''; ?>>حسب إعداد القسم</option>
+	                                <option value="free" <?php echo $editInspectionMode === 'free' ? 'selected' : ''; ?>>معاينة مجانية لهذه الخدمة</option>
+	                                <option value="paid" <?php echo $editInspectionMode === 'paid' ? 'selected' : ''; ?>>معاينة برسوم لهذه الخدمة</option>
+	                            </select>
+	                        </div>
+	                        <div class="form-group">
+	                            <label class="form-label">رسوم المعاينة (⃁)</label>
+	                            <input type="number" step="0.01" min="0" name="inspection_fee" class="form-control" value="<?php echo htmlspecialchars((string) $editInspectionFee, ENT_QUOTES, 'UTF-8'); ?>">
+	                        </div>
+	                    </div>
+	                    <div class="form-group">
+	                        <label class="form-label">تفاصيل المعاينة بالعربي</label>
+	                        <textarea name="inspection_details_ar" class="form-control" rows="2"><?php echo htmlspecialchars((string) ($service['inspection_details_ar'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
+	                    </div>
+	                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+	                        <div class="form-group">
+	                            <label class="form-label">Details EN</label>
+	                            <textarea name="inspection_details_en" class="form-control" rows="2"><?php echo htmlspecialchars((string) ($service['inspection_details_en'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
+	                        </div>
+	                        <div class="form-group">
+	                            <label class="form-label">Details UR</label>
+	                            <textarea name="inspection_details_ur" class="form-control" rows="2"><?php echo htmlspecialchars((string) ($service['inspection_details_ur'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
+	                        </div>
+	                    </div>
+	                </div>
+
+	                <div style="display: flex; gap: 20px;">
                     <div class="form-group">
                         <label class="form-label" style="cursor: pointer;">
                             <input type="checkbox" name="is_active" <?php echo $service['is_active'] ? 'checked' : ''; ?>>

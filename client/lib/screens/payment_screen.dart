@@ -11,6 +11,7 @@ import '../services/offers_service.dart';
 import '../services/orders_service.dart';
 import '../services/wallet_service.dart';
 import '../utils/saudi_riyal_icon.dart';
+import 'static_content_page_screen.dart';
 
 class PaymentScreen extends StatefulWidget {
   final double amount;
@@ -129,6 +130,13 @@ class _PaymentScreenState extends State<PaymentScreen> {
     } catch (_) {
       // Keep fallback summary values when request fails.
     }
+  }
+
+  void _openStaticContentPage(StaticContentPageKey page) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => StaticContentPageScreen(page: page)),
+    );
   }
 
   Future<void> _triggerAutoCardPayment() async {
@@ -1336,6 +1344,21 @@ class _PaymentScreenState extends State<PaymentScreen> {
   }
 
   Widget _buildTermsCard() {
+    const legalStyle = TextStyle(
+      fontSize: 12,
+      color: AppColors.gray700,
+      fontFamily: 'Cairo',
+      height: 1.4,
+    );
+    const linkStyle = TextStyle(
+      fontSize: 12,
+      color: Colors.orange,
+      fontFamily: 'Cairo',
+      fontWeight: FontWeight.w700,
+      decoration: TextDecoration.underline,
+      height: 1.4,
+    );
+
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -1352,7 +1375,8 @@ class _PaymentScreenState extends State<PaymentScreen> {
             height: 20,
             child: Checkbox(
               value: _agreedToPolicy,
-              onChanged: (val) => setState(() => _agreedToPolicy = val!),
+              onChanged: (val) =>
+                  setState(() => _agreedToPolicy = val ?? false),
               activeColor: Colors.orange,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(4),
@@ -1361,37 +1385,26 @@ class _PaymentScreenState extends State<PaymentScreen> {
           ),
           const SizedBox(width: 8),
           Expanded(
-            child: GestureDetector(
-              onTap: () => setState(() => _agreedToPolicy = !_agreedToPolicy),
-              child: RichText(
-                text: TextSpan(
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: AppColors.gray700,
-                    fontFamily: 'Cairo',
-                    height: 1.4,
+            child: Wrap(
+              crossAxisAlignment: WrapCrossAlignment.center,
+              children: [
+                Text(context.tr('i_agree_to'), style: legalStyle),
+                InkWell(
+                  onTap: () =>
+                      _openStaticContentPage(StaticContentPageKey.terms),
+                  child: Text(
+                    context.tr('terms_and_conditions'),
+                    style: linkStyle,
                   ),
-                  children: [
-                    TextSpan(text: context.tr('i_agree_to')),
-                    TextSpan(
-                      text: context.tr('terms_and_conditions'),
-                      style: const TextStyle(
-                        color: Colors.orange,
-                        decoration: TextDecoration.underline,
-                      ),
-                    ),
-                    TextSpan(text: context.tr('and')),
-                    TextSpan(
-                      text: context.tr('refund_policy'),
-                      style: const TextStyle(
-                        color: Colors.orange,
-                        decoration: TextDecoration.underline,
-                      ),
-                    ),
-                    TextSpan(text: context.tr('confirm_non_refundable')),
-                  ],
                 ),
-              ),
+                Text(context.tr('and'), style: legalStyle),
+                InkWell(
+                  onTap: () =>
+                      _openStaticContentPage(StaticContentPageKey.refund),
+                  child: Text(context.tr('refund_policy'), style: linkStyle),
+                ),
+                Text(context.tr('confirm_non_refundable'), style: legalStyle),
+              ],
             ),
           ),
         ],

@@ -275,18 +275,24 @@ class _AllServicesScreenState extends State<AllServicesScreen> {
                 imageUrl: mediaUrl,
                 fit: BoxFit.cover,
                 errorWidget: (_, __, ___) => Center(
-                  child: Text(
-                    icon.isNotEmpty ? icon : '🔧',
-                    style: const TextStyle(fontSize: 18),
-                  ),
+                  child: icon.isNotEmpty
+                      ? Text(icon, style: const TextStyle(fontSize: 18))
+                      : const Icon(
+                          Icons.category_outlined,
+                          color: AppColors.primary,
+                          size: 22,
+                        ),
                 ),
               ),
             )
           : Center(
-              child: Text(
-                icon.isNotEmpty ? icon : '🔧',
-                style: const TextStyle(fontSize: 18),
-              ),
+              child: icon.isNotEmpty
+                  ? Text(icon, style: const TextStyle(fontSize: 18))
+                  : const Icon(
+                      Icons.category_outlined,
+                      color: AppColors.primary,
+                      size: 22,
+                    ),
             ),
     );
   }

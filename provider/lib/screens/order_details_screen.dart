@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
@@ -126,6 +127,238 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
     }
 
     return const <int>[];
+  }
+
+  String _firstNonEmpty(List<String> values) {
+    for (final value in values) {
+      final trimmed = value.trim();
+      if (trimmed.isNotEmpty) {
+        return trimmed;
+      }
+    }
+    return '';
+  }
+
+  String _humanizeToken(String value) {
+    return value.replaceAll('_', ' ').trim();
+  }
+
+  String _localizedProblemTypeToken(String rawToken) {
+    final token = rawToken
+        .toLowerCase()
+        .trim()
+        .replaceAll('-', '_')
+        .replaceAll(' ', '_');
+    if (token.isEmpty) return '';
+
+    final localeCode = Localizations.localeOf(context).languageCode;
+    final isEn = localeCode == 'en';
+    final isUr = localeCode == 'ur';
+
+    switch (token) {
+      case 'container_rental':
+        return isEn
+            ? 'Container Rental Service'
+            : isUr
+            ? 'کنٹینر کرایہ سروس'
+            : 'طلب خدمة الحاويات';
+      case 'furniture_moving':
+        return isEn
+            ? 'Furniture Moving Service'
+            : isUr
+            ? 'فرنیچر منتقلی سروس'
+            : 'طلب نقل العفش';
+      case 'spare_parts_with_installation':
+        return isEn
+            ? 'Spare Parts With Installation'
+            : isUr
+            ? 'اسپیئر پارٹس مع تنصیب'
+            : 'قطع غيار مع التركيب';
+      case 'spare_parts_order':
+      case 'spare_parts':
+        return isEn
+            ? 'Spare Parts Request'
+            : isUr
+            ? 'اسپیئر پارٹس کی درخواست'
+            : 'طلب قطع غيار';
+      default:
+        return '';
+    }
+  }
+
+  Map<String, dynamic> _problemDetailsMap() {
+    final raw = _order?['problem_details'];
+    if (raw is Map) {
+      return Map<String, dynamic>.from(raw);
+    }
+    if (raw is String) {
+      final trimmed = raw.trim();
+      if (trimmed.isEmpty) return {};
+      try {
+        final decoded = jsonDecode(trimmed);
+        if (decoded is Map) {
+          return Map<String, dynamic>.from(decoded);
+        }
+      } catch (_) {
+        return {'type': trimmed};
+      }
+    }
+    return {};
+  }
+
+  String _problemTypeLabel() {
+    final details = _problemDetailsMap();
+    if (details.isEmpty) {
+      return context.tr('problem_type_not_specified');
+    }
+
+    final problemTypes = <String>[];
+    void addProblemTypes(dynamic value) {
+      if (value == null) return;
+      if (value is String) {
+        final trimmed = value.trim();
+        if (trimmed.isEmpty) return;
+        try {
+          final decoded = jsonDecode(trimmed);
+          addProblemTypes(decoded);
+          return;
+        } catch (_) {
+          final parts = trimmed.split(RegExp(r'\s*[,،]\s*'));
+          if (parts.length > 1) {
+            for (final part in parts) {
+              addProblemTypes(part);
+            }
+            return;
+          }
+          final label = _localizedProblemTypeToken(trimmed);
+          final resolved = label.isNotEmpty
+              ? label
+              : (trimmed.contains('_') ? _humanizeToken(trimmed) : trimmed);
+          if (resolved.isNotEmpty && !problemTypes.contains(resolved)) {
+            problemTypes.add(resolved);
+          }
+          return;
+        }
+      }
+      if (value is List) {
+        for (final item in value) {
+          addProblemTypes(item);
+        }
+        return;
+      }
+      if (value is Map) {
+        final localeCode = Localizations.localeOf(context).languageCode;
+        final label = localeCode == 'en'
+            ? _firstNonEmpty([
+                (value['title_en'] ?? value['name_en'] ?? '').toString(),
+                (value['title'] ?? value['name'] ?? value['type'] ?? '')
+                    .toString(),
+                (value['title_ar'] ?? value['name_ar'] ?? '').toString(),
+              ])
+            : localeCode == 'ur'
+            ? _firstNonEmpty([
+                (value['title_ur'] ?? value['name_ur'] ?? '').toString(),
+                (value['title_en'] ?? value['name_en'] ?? '').toString(),
+                (value['title'] ?? value['name'] ?? value['type'] ?? '')
+                    .toString(),
+                (value['title_ar'] ?? value['name_ar'] ?? '').toString(),
+              ])
+            : _firstNonEmpty([
+                (value['title_ar'] ?? value['name_ar'] ?? '').toString(),
+                (value['title'] ?? value['name'] ?? value['type'] ?? '')
+                    .toString(),
+                (value['title_en'] ?? value['name_en'] ?? '').toString(),
+              ]);
+        if (label.trim().isNotEmpty) {
+          addProblemTypes(label);
+          return;
+        }
+        for (final item in value.values) {
+          addProblemTypes(item);
+        }
+      }
+    }
+
+    addProblemTypes(_order?['problem_type_labels']);
+    addProblemTypes(details['problem_type_labels']);
+    addProblemTypes(details['problem_types']);
+    addProblemTypes(details['types']);
+    addProblemTypes(details['problem_type_titles']);
+    addProblemTypes(details['selected_problem_types']);
+    if (problemTypes.isNotEmpty) {
+      return problemTypes.join('، ');
+    }
+
+    final directMapped = _localizedProblemTypeToken(
+      (details['type'] ?? details['module'] ?? '').toString(),
+    );
+    if (directMapped.isNotEmpty) {
+      return directMapped;
+    }
+
+    final localeCode = Localizations.localeOf(context).languageCode;
+    final localized = localeCode == 'en'
+        ? _firstNonEmpty([
+            (details['type_en'] ?? details['name_en'] ?? '').toString(),
+            (details['type'] ?? '').toString(),
+            (details['type_ar'] ?? details['name_ar'] ?? '').toString(),
+          ])
+        : localeCode == 'ur'
+        ? _firstNonEmpty([
+            (details['type_ur'] ?? details['name_ur'] ?? '').toString(),
+            (details['type_en'] ?? details['name_en'] ?? '').toString(),
+            (details['type'] ?? '').toString(),
+            (details['type_ar'] ?? details['name_ar'] ?? '').toString(),
+          ])
+        : _firstNonEmpty([
+            (details['type_ar'] ?? details['name_ar'] ?? '').toString(),
+            (details['type'] ?? '').toString(),
+            (details['type_en'] ?? details['name_en'] ?? '').toString(),
+          ]);
+
+    if (localized.isEmpty) {
+      return context.tr('problem_type_not_specified');
+    }
+    final mappedLocalized = _localizedProblemTypeToken(localized);
+    if (mappedLocalized.isNotEmpty) {
+      return mappedLocalized;
+    }
+    return localized.contains('_') ? _humanizeToken(localized) : localized;
+  }
+
+  String _inspectionFeeLabel() {
+    final fee = _toDouble(_order?['inspection_fee']);
+    if (fee <= 0) {
+      return context.tr('order_inspection_free');
+    }
+    return '${fee.toStringAsFixed(2)} ${context.tr('sar')}';
+  }
+
+  String _inspectionPolicyDetails() {
+    final details = _problemDetailsMap();
+    final rawPolicy = details['inspection_policy'];
+    if (rawPolicy is! Map) return '';
+    final policy = Map<String, dynamic>.from(rawPolicy);
+    final localeCode = Localizations.localeOf(context).languageCode;
+    if (localeCode == 'en') {
+      return _firstNonEmpty([
+        (policy['details_en'] ?? '').toString(),
+        (policy['details_ar'] ?? '').toString(),
+        (policy['details_ur'] ?? '').toString(),
+      ]);
+    }
+    if (localeCode == 'ur') {
+      return _firstNonEmpty([
+        (policy['details_ur'] ?? '').toString(),
+        (policy['details_en'] ?? '').toString(),
+        (policy['details_ar'] ?? '').toString(),
+      ]);
+    }
+    return _firstNonEmpty([
+      (policy['details_ar'] ?? '').toString(),
+      (policy['details_en'] ?? '').toString(),
+      (policy['details_ur'] ?? '').toString(),
+    ]);
   }
 
   String _latLngKey(double lat, double lng) {
@@ -1483,8 +1716,18 @@ class _OrderDetailsScreenState extends State<OrderDetailsScreen> {
                     ),
                     const Divider(height: 24),
                     Text(
-                      '${context.tr('problem_type_label')}: ${_order!['problem_details']?['type'] ?? context.tr('problem_type_not_specified')}',
+                      '${context.tr('problem_type_label')}: ${_problemTypeLabel()}',
                     ),
+                    const SizedBox(height: 8),
+                    Text(
+                      '${context.tr('inspection_fee_label')}: ${_inspectionFeeLabel()}',
+                    ),
+                    if (_inspectionPolicyDetails().isNotEmpty) ...[
+                      const SizedBox(height: 8),
+                      Text(
+                        '${context.tr('inspection_details_label')}: ${_inspectionPolicyDetails()}',
+                      ),
+                    ],
                     const SizedBox(height: 8),
                     Text(
                       '${context.tr('customer_description_label')}: ${_order!['notes'] ?? _order!['problem_details']?['user_desc'] ?? context.tr('not_available')}',

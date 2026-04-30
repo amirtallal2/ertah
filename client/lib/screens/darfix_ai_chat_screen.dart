@@ -4,6 +4,7 @@ import 'package:provider/provider.dart';
 
 import '../config/app_theme.dart';
 import '../providers/auth_provider.dart';
+import '../providers/app_settings_provider.dart';
 import '../providers/location_provider.dart';
 import '../services/app_localizations.dart';
 import '../services/darfix_ai_service.dart';
@@ -33,6 +34,14 @@ class _DarfixAiChatScreenState extends State<DarfixAiChatScreen> {
   Future<void> _sendMessage() async {
     final text = _messageController.text.trim();
     if (text.isEmpty || _isSending) {
+      return;
+    }
+
+    final appSettingsProvider = context.read<AppSettingsProvider>();
+    if (!appSettingsProvider.isDarfixAiEnabled) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(context.tr('darfix_ai_disabled_message'))),
+      );
       return;
     }
 
@@ -106,6 +115,9 @@ class _DarfixAiChatScreenState extends State<DarfixAiChatScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final appSettingsProvider = context.watch<AppSettingsProvider>();
+    final isAiReady = appSettingsProvider.isInitialized;
+    final isAiEnabled = appSettingsProvider.isDarfixAiEnabled;
     final canSend = _messageController.text.trim().isNotEmpty && !_isSending;
 
     return Scaffold(
@@ -160,109 +172,169 @@ class _DarfixAiChatScreenState extends State<DarfixAiChatScreen> {
           ],
         ),
       ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
-            child: _buildIntroCard(context),
-          ),
-          Expanded(
-            child: ListView.builder(
-              controller: _scrollController,
-              padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
-              itemCount: _messages.length + (_isSending ? 1 : 0),
-              itemBuilder: (context, index) {
-                if (_isSending && index == _messages.length) {
-                  return _TypingBubble(text: context.tr('darfix_ai_typing'));
-                }
+      body: !isAiReady
+          ? const Center(child: CircularProgressIndicator())
+          : !isAiEnabled
+              ? _buildDisabledState(context)
+              : Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 16, 16, 10),
+                      child: _buildIntroCard(context),
+                    ),
+                    Expanded(
+                      child: ListView.builder(
+                        controller: _scrollController,
+                        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+                        itemCount: _messages.length + (_isSending ? 1 : 0),
+                        itemBuilder: (context, index) {
+                          if (_isSending && index == _messages.length) {
+                            return _TypingBubble(
+                              text: context.tr('darfix_ai_typing'),
+                            );
+                          }
 
-                final message = _messages[index];
-                return _MessageBubble(message: message);
-              },
-            ),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-              child: Row(
-                crossAxisAlignment: CrossAxisAlignment.end,
-                children: [
-                  Expanded(
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(22),
-                        border: Border.all(
-                          color: AppColors.gray200,
-                          width: 1,
-                        ),
-                      ),
-                      child: TextField(
-                        controller: _messageController,
-                        minLines: 1,
-                        maxLines: 5,
-                        textInputAction: TextInputAction.send,
-                        onChanged: (_) => setState(() {}),
-                        onSubmitted: (_) => _sendMessage(),
-                        decoration: InputDecoration(
-                          hintText: context.tr('darfix_ai_input_hint'),
-                          border: InputBorder.none,
-                          contentPadding: const EdgeInsets.symmetric(
-                            horizontal: 18,
-                            vertical: 14,
-                          ),
-                        ),
+                          final message = _messages[index];
+                          return _MessageBubble(message: message);
+                        },
                       ),
                     ),
-                  ),
-                  const SizedBox(width: 10),
-                  GestureDetector(
-                    onTap: canSend ? _sendMessage : null,
-                    child: AnimatedContainer(
-                      duration: const Duration(milliseconds: 180),
-                      width: 54,
-                      height: 54,
-                      decoration: BoxDecoration(
-                        gradient: canSend
-                            ? const LinearGradient(
-                                colors: [
-                                  AppColors.primary,
-                                  AppColors.secondary,
-                                ],
-                                begin: Alignment.topLeft,
-                                end: Alignment.bottomRight,
-                              )
-                            : LinearGradient(
-                                colors: [
-                                  AppColors.gray300,
-                                  AppColors.gray200,
-                                ],
-                              ),
-                        borderRadius: BorderRadius.circular(18),
-                        boxShadow: canSend
-                            ? [
-                                BoxShadow(
-                                  color: AppColors.secondary.withValues(
-                                    alpha: 0.18,
+                    SafeArea(
+                      top: false,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.end,
+                          children: [
+                            Expanded(
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  color: Colors.white,
+                                  borderRadius: BorderRadius.circular(22),
+                                  border: Border.all(
+                                    color: AppColors.gray200,
+                                    width: 1,
                                   ),
-                                  blurRadius: 18,
-                                  offset: const Offset(0, 10),
                                 ),
-                              ]
-                            : null,
-                      ),
-                      child: const Icon(
-                        Icons.arrow_upward_rounded,
-                        color: Colors.white,
+                                child: TextField(
+                                  controller: _messageController,
+                                  minLines: 1,
+                                  maxLines: 5,
+                                  textInputAction: TextInputAction.send,
+                                  onChanged: (_) => setState(() {}),
+                                  onSubmitted: (_) => _sendMessage(),
+                                  decoration: InputDecoration(
+                                    hintText: context.tr(
+                                      'darfix_ai_input_hint',
+                                    ),
+                                    border: InputBorder.none,
+                                    contentPadding: const EdgeInsets.symmetric(
+                                      horizontal: 18,
+                                      vertical: 14,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 10),
+                            GestureDetector(
+                              onTap: canSend ? _sendMessage : null,
+                              child: AnimatedContainer(
+                                duration: const Duration(milliseconds: 180),
+                                width: 54,
+                                height: 54,
+                                decoration: BoxDecoration(
+                                  gradient: canSend
+                                      ? const LinearGradient(
+                                          colors: [
+                                            AppColors.primary,
+                                            AppColors.secondary,
+                                          ],
+                                          begin: Alignment.topLeft,
+                                          end: Alignment.bottomRight,
+                                        )
+                                      : LinearGradient(
+                                          colors: [
+                                            AppColors.gray300,
+                                            AppColors.gray200,
+                                          ],
+                                        ),
+                                  borderRadius: BorderRadius.circular(18),
+                                  boxShadow: canSend
+                                      ? [
+                                          BoxShadow(
+                                            color: AppColors.secondary
+                                                .withValues(alpha: 0.18),
+                                            blurRadius: 18,
+                                            offset: const Offset(0, 10),
+                                          ),
+                                        ]
+                                      : null,
+                                ),
+                                child: const Icon(
+                                  Icons.arrow_upward_rounded,
+                                  color: Colors.white,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
-                  ),
-                ],
+                  ],
+                ),
+    );
+  }
+
+  Widget _buildDisabledState(BuildContext context) {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.all(24),
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(24),
+          decoration: BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.circular(24),
+            boxShadow: [
+              BoxShadow(
+                color: AppColors.primary.withValues(alpha: 0.08),
+                blurRadius: 22,
+                offset: const Offset(0, 10),
               ),
-            ),
+            ],
           ),
-        ],
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.power_settings_new_rounded,
+                size: 48,
+                color: AppColors.primary,
+              ),
+              const SizedBox(height: 14),
+              Text(
+                context.tr('darfix_ai_disabled_title'),
+                style: GoogleFonts.cairo(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  color: AppColors.gray900,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 10),
+              Text(
+                context.tr('darfix_ai_disabled_message'),
+                style: GoogleFonts.cairo(
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                  color: AppColors.gray600,
+                ),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }

@@ -4,6 +4,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../providers/auth_provider.dart';
+import '../providers/app_settings_provider.dart';
 import '../config/app_theme.dart';
 import 'home_screen.dart';
 import 'orders_screen.dart';
@@ -50,6 +51,10 @@ class _MainNavigationState extends State<MainNavigation> {
 
   @override
   Widget build(BuildContext context) {
+    final isDarfixAiEnabled = context.select<AppSettingsProvider, bool>(
+      (provider) => provider.isInitialized && provider.isDarfixAiEnabled,
+    );
+
     return Scaffold(
       body: IndexedStack(
         index: _currentIndex,
@@ -131,7 +136,7 @@ class _MainNavigationState extends State<MainNavigation> {
           ),
         ],
       ),
-      floatingActionButton: _currentIndex == 0
+      floatingActionButton: _currentIndex == 0 && isDarfixAiEnabled
           ? Padding(
               padding: const EdgeInsets.only(bottom: 6),
               child: _DarfixAiFab(

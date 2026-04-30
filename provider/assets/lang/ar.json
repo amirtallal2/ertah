@@ -514,6 +514,9 @@
     "parts_cost_label": "قطع الغيار",
     "problem_type_label": "نوع المشكلة",
     "problem_type_not_specified": "غير محدد",
+    "inspection_fee_label": "رسوم المعاينة",
+    "inspection_details_label": "تفاصيل المعاينة",
+    "order_inspection_free": "معاينة مجانية",
     "reject_order": "رفض الطلب",
     "save_estimate": "حفظ التقدير",
     "send_invoice_for_approval": "إرسال الفاتورة للاعتماد",
@@ -554,5 +557,8 @@
     "provider_invoice_item_source_catalog": "من المخزون",
     "provider_invoice_report": "تقرير الفاتورة",
     "provider_spare_part_default_name": "قطعة",
+    "provider_finance_pending": "معلق",
+    "provider_finance_transferred": "محول",
+    "provider_finance_deductions": "خصومات",
     "provider_invoice_total": "الإجمالي"
 }

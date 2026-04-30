@@ -15,6 +15,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../../includes/database.php';
+require_once __DIR__ . '/../../includes/functions.php';
+require_once __DIR__ . '/../../includes/provider_finance.php';
 require_once __DIR__ . '/../helpers/response.php';
 require_once __DIR__ . '/../helpers/jwt.php';
 
@@ -42,6 +45,9 @@ switch ($action) {
         break;
     case 'availability':
         updateAvailability($input);
+        break;
+    case 'financial':
+        getProviderFinancial();
         break;
     case 'categories':
         getAvailableCategories();
@@ -219,22 +225,6 @@ function providerSpecialCategories()
         }
     }
 
-    if (providerApiTableExists('container_services')) {
-        $result = $conn->query("SELECT COUNT(*) AS total FROM container_services WHERE is_active = 1");
-        $count = $result ? (int) (($result->fetch_assoc()['total'] ?? 0)) : 0;
-        if ($count > 0) {
-            $rows[] = [
-                'id' => -102,
-                'parent_id' => null,
-                'name_ar' => 'الحاويات',
-                'name_en' => 'Containers',
-                'icon' => '📦',
-                'sort_order' => 9002,
-                'special_module' => 'container_rental',
-            ];
-        }
-    }
-
     return $rows;
 }
 
@@ -329,7 +319,7 @@ function keepOnlyExistingCategoryIds($categoryIds)
     if (!empty($dbCategoryIds) && providerApiTableExists('service_categories')) {
         $placeholders = implode(',', array_fill(0, count($dbCategoryIds), '?'));
         $types = str_repeat('i', count($dbCategoryIds));
-        $sql = "SELECT id FROM service_categories WHERE is_active = 1 AND id IN ($placeholders)";
+        $sql = "SELECT id, name_ar, name_en FROM service_categories WHERE is_active = 1 AND id IN ($placeholders)";
 
         $stmt = $conn->prepare($sql);
         if ($stmt) {
@@ -338,7 +328,7 @@ function keepOnlyExistingCategoryIds($categoryIds)
             $result = $stmt->get_result();
             while ($row = $result->fetch_assoc()) {
                 $id = (int) ($row['id'] ?? 0);
-                if ($id > 0) {
+                if ($id > 0 && !isOtherServiceCategoryLabel($row['name_ar'] ?? '', $row['name_en'] ?? '')) {
                     $valid[] = $id;
                 }
             }
@@ -490,6 +480,13 @@ function normalizeProvider($provider)
     $providerId = (int) ($provider['id'] ?? 0);
     $categoryIds = getProviderCategoryIds($providerId);
     $isCompleted = computeProviderProfileCompleted($provider, $categoryIds);
+    $financeSummary = providerFinanceGetSummary($providerId);
+    try {
+        providerFinanceSyncProviderOrderStats($providerId);
+        $financeSummary = providerFinanceSyncProviderWalletBalance($providerId);
+    } catch (Throwable $e) {
+        error_log('Provider API finance summary failed: ' . $e->getMessage());
+    }
 
     return [
         'id' => $providerId,
@@ -516,7 +513,8 @@ function normalizeProvider($provider)
         'experience_years' => (int) ($provider['experience_years'] ?? 0),
         'category_ids' => $categoryIds,
         'categories_locked' => isset($provider['categories_locked']) ? ((int) $provider['categories_locked'] === 1) : !empty($categoryIds),
-        'wallet_balance' => (float) ($provider['wallet_balance'] ?? 0),
+        'wallet_balance' => (float) ($financeSummary['available_balance'] ?? ($provider['wallet_balance'] ?? 0)),
+        'financial_summary' => $financeSummary,
         'rating' => (float) ($provider['rating'] ?? 0),
         'profile_completed' => $isCompleted,
         'needs_profile_completion' => !$isCompleted,
@@ -734,6 +732,40 @@ function getProviderProfile()
     $provider = getProviderById($providerId) ?: $provider;
 
     sendSuccess(normalizeProvider($provider));
+}
+
+function getProviderFinancial()
+{
+    ensureProviderProfileSchema();
+    $providerId = requireProviderAuthId();
+
+    try {
+        providerFinanceSyncProviderOrderStats($providerId);
+        $summary = providerFinanceSyncProviderWalletBalance($providerId);
+        $transactions = providerFinanceGetProviderTransactions($providerId, 50);
+    } catch (Throwable $e) {
+        error_log('Provider finance endpoint failed: ' . $e->getMessage());
+        sendError('تعذر تحميل الحساب المالي حالياً', 500);
+    }
+
+    sendSuccess([
+        'summary' => $summary,
+        'transactions' => array_map(static function ($row) {
+            return [
+                'id' => (int) ($row['id'] ?? 0),
+                'order_id' => isset($row['order_id']) ? (int) $row['order_id'] : null,
+                'order_number' => $row['order_number'] ?? null,
+                'type' => $row['type'] ?? '',
+                'type_label' => providerFinanceTransactionTypeLabel((string) ($row['type'] ?? '')),
+                'amount' => (float) ($row['amount'] ?? 0),
+                'signed_amount' => (float) ($row['signed_amount'] ?? providerFinanceSignedAmount($row)),
+                'status' => $row['status'] ?? 'completed',
+                'status_label' => providerFinanceTransactionStatusLabel((string) ($row['status'] ?? 'completed')),
+                'description' => $row['description'] ?? '',
+                'created_at' => $row['created_at'] ?? null,
+            ];
+        }, $transactions),
+    ]);
 }
 
 function updateProviderProfile($input)
@@ -980,7 +1012,7 @@ function getAvailableCategories()
     if (providerApiTableExists('service_categories')) {
         $condition = $rootOnly ? "AND (parent_id IS NULL OR parent_id = 0)" : "";
         $stmt = $conn->prepare(
-            "SELECT id, parent_id, name_ar, name_en, icon, sort_order
+            "SELECT id, parent_id, name_ar, name_en, icon, image, sort_order
              FROM service_categories
              WHERE is_active = 1 {$condition}
              ORDER BY COALESCE(parent_id, id) ASC,
@@ -999,15 +1031,18 @@ function getAvailableCategories()
                 'parent_id' => !empty($row['parent_id']) ? (int) $row['parent_id'] : null,
                 'name_ar' => $row['name_ar'] ?? '',
                 'name_en' => $row['name_en'] ?? null,
-                'icon' => $row['icon'] ?? null,
+                'icon' => serviceCategoryIconForApi($row['icon'] ?? null, $row['name_ar'] ?? '', $row['name_en'] ?? ''),
+                'image' => serviceCategoryImageForApi($row['image'] ?? null),
                 'sort_order' => (int) ($row['sort_order'] ?? 0),
                 'special_module' => null,
             ];
         }
     }
 
-    $rows = array_merge($rows, providerSpecialCategories());
-    usort($rows, fn($a, $b) => ((int) ($a['sort_order'] ?? 0)) <=> ((int) ($b['sort_order'] ?? 0)));
+    $rows = array_values(array_filter(
+        deduplicateServiceCategoriesForApi(array_merge($rows, providerSpecialCategories())),
+        static fn($row) => !isOtherServiceCategoryLabel($row['name_ar'] ?? '', $row['name_en'] ?? '')
+    ));
 
     sendSuccess($rows);
 }

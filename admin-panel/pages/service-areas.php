@@ -816,6 +816,7 @@ include '../includes/header.php';
 (() => {
     const areas = <?php echo json_encode($areasForMap, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES); ?>;
     const editArea = <?php echo $editArea ? json_encode(serviceAreaSummarizeArea($editArea) + ['polygon' => serviceAreaDecodePolygon($editArea['polygon_json'] ?? null)], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES) : 'null'; ?>;
+    const tileProxyBase = '../ajax/map_tiles.php';
 
     const map = L.map('service-area-map', {
         zoomControl: true,
@@ -825,27 +826,25 @@ include '../includes/header.php';
         {
             id: 'osm',
             label: 'OpenStreetMap',
-            url: 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',
+            url: `${tileProxyBase}?provider=osm&z={z}&x={x}&y={y}`,
             options: {
                 maxZoom: 19,
-                subdomains: 'abc',
             },
             attribution: '&copy; OpenStreetMap contributors',
         },
         {
             id: 'carto_light',
             label: 'Carto Light',
-            url: 'https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png',
+            url: `${tileProxyBase}?provider=carto_light&z={z}&x={x}&y={y}`,
             options: {
                 maxZoom: 20,
-                subdomains: 'abcd',
             },
             attribution: '&copy; OpenStreetMap contributors &copy; CARTO',
         },
         {
             id: 'esri_street',
             label: 'Esri Streets',
-            url: 'https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+            url: `${tileProxyBase}?provider=esri_street&z={z}&x={x}&y={y}`,
             options: {
                 maxZoom: 19,
             },

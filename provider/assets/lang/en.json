@@ -514,6 +514,9 @@
     "parts_cost_label": "Parts Cost",
     "problem_type_label": "Problem Type",
     "problem_type_not_specified": "Not specified",
+    "inspection_fee_label": "Inspection fee",
+    "inspection_details_label": "Inspection details",
+    "order_inspection_free": "Free inspection",
     "reject_order": "Reject Order",
     "save_estimate": "Save Estimate",
     "send_invoice_for_approval": "Send Invoice for Approval",
@@ -554,5 +557,8 @@
     "provider_invoice_item_source_catalog": "From catalog",
     "provider_invoice_report": "Invoice report",
     "provider_spare_part_default_name": "Part",
+    "provider_finance_pending": "Pending",
+    "provider_finance_transferred": "Transferred",
+    "provider_finance_deductions": "Deductions",
     "provider_invoice_total": "Total"
 }

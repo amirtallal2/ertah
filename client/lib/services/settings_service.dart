@@ -28,6 +28,14 @@ class SettingsService {
     );
   }
 
+  /// Get any managed static content page
+  Future<ApiResponse> getContentPage(String action, {String? lang}) async {
+    return await _api.get(
+      '/mobile/settings.php?action=$action',
+      params: _langParams(lang),
+    );
+  }
+
   /// Get terms and conditions
   Future<ApiResponse> getTerms({String? lang}) async {
     return await _api.get(
@@ -40,6 +48,14 @@ class SettingsService {
   Future<ApiResponse> getPrivacy({String? lang}) async {
     return await _api.get(
       '/mobile/settings.php?action=privacy',
+      params: _langParams(lang),
+    );
+  }
+
+  /// Get refund policy
+  Future<ApiResponse> getRefund({String? lang}) async {
+    return await _api.get(
+      '/mobile/settings.php?action=refund',
       params: _langParams(lang),
     );
   }

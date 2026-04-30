@@ -6,6 +6,7 @@
 
 require_once '../init.php';
 requireLogin();
+require_once '../includes/inspection_pricing.php';
 
 $pageTitle = 'فئات الخدمات';
 $pageSubtitle = 'إدارة الأقسام الرئيسية والفرعية';
@@ -56,6 +57,7 @@ function resolveParentCategoryId(int $requestedParentId): ?int
 }
 
 ensureServiceCategoriesHierarchySchema();
+inspectionPricingEnsureSchema();
 
 $action = get('action', 'list');
 $id = (int) get('id');
@@ -71,6 +73,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $nameUr = post('name_ur');
         $sortOrder = (int) post('sort_order');
         $warrantyDays = max(0, (int) post('warranty_days'));
+        $inspectionMode = inspectionPricingNormalizeMode(post('inspection_pricing_mode'), false);
+        $inspectionFee = $inspectionMode === 'paid' ? inspectionPricingNormalizeFee(post('inspection_fee')) : 0.0;
 
         $requestedParentId = (int) post('parent_id');
         $parentId = resolveParentCategoryId($requestedParentId);
@@ -82,6 +86,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if ($requestedParentId > 0 && $parentId === null) {
             setFlashMessage('danger', 'القسم الرئيسي المختار غير صالح');
+            redirect('categories.php');
+        }
+
+        if ($inspectionMode === 'paid' && $inspectionFee <= 0) {
+            setFlashMessage('danger', 'يرجى إدخال رسوم معاينة صحيحة أكبر من صفر أو اختيار معاينة مجانية');
             redirect('categories.php');
         }
 
@@ -111,6 +120,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'icon' => $iconPath,
             'image' => $imagePath,
             'warranty_days' => $warrantyDays,
+            'inspection_pricing_mode' => $inspectionMode,
+            'inspection_fee' => $inspectionFee,
+            'inspection_details_ar' => clean(post('inspection_details_ar')),
+            'inspection_details_en' => clean(post('inspection_details_en')),
+            'inspection_details_ur' => clean(post('inspection_details_ur')),
             'sort_order' => $sortOrder,
             'is_active' => 1
         ]);
@@ -128,6 +142,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $nameUr = post('name_ur');
         $sortOrder = (int) post('sort_order');
         $warrantyDays = max(0, (int) post('warranty_days'));
+        $inspectionMode = inspectionPricingNormalizeMode(post('inspection_pricing_mode'), false);
+        $inspectionFee = $inspectionMode === 'paid' ? inspectionPricingNormalizeFee(post('inspection_fee')) : 0.0;
         $isActive = isset($_POST['is_active']) ? 1 : 0;
 
         $category = db()->fetch('SELECT id, parent_id FROM service_categories WHERE id = ?', [$categoryId]);
@@ -154,6 +170,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             redirect('categories.php?action=edit&id=' . $categoryId);
         }
 
+        if ($inspectionMode === 'paid' && $inspectionFee <= 0) {
+            setFlashMessage('danger', 'يرجى إدخال رسوم معاينة صحيحة أكبر من صفر أو اختيار معاينة مجانية');
+            redirect('categories.php?action=edit&id=' . $categoryId);
+        }
+
         $childrenCount = (int) db()->count('service_categories', 'parent_id = ?', [$categoryId]);
         if ($childrenCount > 0 && $parentId !== null) {
             setFlashMessage('danger', 'لا يمكن تحويل قسم رئيسي لديه أقسام فرعية إلى قسم فرعي');
@@ -166,6 +187,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'name_en' => $nameEn,
             'name_ur' => $nameUr !== '' ? $nameUr : ($nameEn !== '' ? $nameEn : $nameAr),
             'warranty_days' => $warrantyDays,
+            'inspection_pricing_mode' => $inspectionMode,
+            'inspection_fee' => $inspectionFee,
+            'inspection_details_ar' => clean(post('inspection_details_ar')),
+            'inspection_details_en' => clean(post('inspection_details_en')),
+            'inspection_details_ur' => clean(post('inspection_details_ur')),
             'sort_order' => $sortOrder,
             'is_active' => $isActive
         ];
@@ -287,6 +313,7 @@ include '../includes/header.php';
                         <th>الاسم بالأردو</th>
                         <th>الترتيب</th>
                         <th>الضمان</th>
+                        <th>المعاينة</th>
                         <th>الحالة</th>
                         <th>عدد الطلبات</th>
                         <th>الأقسام الفرعية</th>
@@ -304,8 +331,13 @@ include '../includes/header.php';
                         </td>
                         <td><?php echo $cat['parent_name_ar'] ?: '-'; ?></td>
                         <td>
-                            <?php if ($cat['icon']): ?>
-                                <img src="<?php echo imageUrl($cat['icon']); ?>" alt="" style="width: 30px; height: 30px; object-fit: contain;">
+                            <?php
+                                $catIcon = serviceCategoryIconForApi($cat['icon'] ?? '', $cat['name_ar'] ?? '', $cat['name_en'] ?? '');
+                            ?>
+                            <?php if ($catIcon && mediaValueLooksLikeFile($catIcon)): ?>
+                                <img src="<?php echo htmlspecialchars($catIcon, ENT_QUOTES, 'UTF-8'); ?>" alt="" style="width: 30px; height: 30px; object-fit: contain;">
+                            <?php elseif ($catIcon): ?>
+                                <span style="font-size: 24px;"><?php echo htmlspecialchars($catIcon, ENT_QUOTES, 'UTF-8'); ?></span>
                             <?php else: ?>
                                 -
                             <?php endif; ?>
@@ -327,6 +359,17 @@ include '../includes/header.php';
                         <td><?php echo $cat['name_ur'] ?: '-'; ?></td>
                         <td><?php echo (int) $cat['sort_order']; ?></td>
                         <td><?php echo (int) ($cat['warranty_days'] ?? 14); ?> يوم</td>
+                        <td>
+                            <?php
+                                $catInspectionMode = inspectionPricingNormalizeMode($cat['inspection_pricing_mode'] ?? 'free', false);
+                                $catInspectionFee = inspectionPricingNormalizeFee($cat['inspection_fee'] ?? 0);
+                            ?>
+                            <?php if ($catInspectionMode === 'paid' && $catInspectionFee > 0): ?>
+                                <span class="badge badge-warning">مدفوعة: <?php echo number_format($catInspectionFee, 2); ?> ⃁</span>
+                            <?php else: ?>
+                                <span class="badge badge-success">مجانية</span>
+                            <?php endif; ?>
+                        </td>
                         <td>
                             <span class="badge <?php echo $cat['is_active'] ? 'badge-success' : 'badge-danger'; ?>">
                                 <?php echo $cat['is_active'] ? 'نشط' : 'غير نشط'; ?>
@@ -416,6 +459,37 @@ include '../includes/header.php';
                     <label class="form-label">مدة الضمان (بالأيام)</label>
                     <input type="number" name="warranty_days" class="form-control" value="14" min="0" max="365">
                 </div>
+
+                <div style="border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; margin-top: 10px;">
+                    <h4 style="margin: 0 0 12px;">إعدادات المعاينة للقسم</h4>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <label class="form-label">نوع المعاينة</label>
+                            <select name="inspection_pricing_mode" class="form-control">
+                                <option value="free">معاينة مجانية</option>
+                                <option value="paid">معاينة برسوم</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">رسوم المعاينة (⃁)</label>
+                            <input type="number" step="0.01" min="0" name="inspection_fee" class="form-control" value="0">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">تفاصيل المعاينة بالعربي</label>
+                        <textarea name="inspection_details_ar" class="form-control" rows="2" placeholder="مثال: تخصم رسوم المعاينة من قيمة التنفيذ عند اعتماد الخدمة."></textarea>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <label class="form-label">Details EN</label>
+                            <textarea name="inspection_details_en" class="form-control" rows="2"></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Details UR</label>
+                            <textarea name="inspection_details_ur" class="form-control" rows="2"></textarea>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline" onclick="hideModal('add-modal')">إلغاء</button>
@@ -474,9 +548,16 @@ include '../includes/header.php';
 
                 <div class="form-group">
                     <label class="form-label">الأيقونة (صورة)</label>
-                    <?php if ($category['icon']): ?>
+                    <?php
+                        $editCategoryIcon = serviceCategoryIconForApi($category['icon'] ?? '', $category['name_ar'] ?? '', $category['name_en'] ?? '');
+                    ?>
+                    <?php if ($editCategoryIcon && mediaValueLooksLikeFile($editCategoryIcon)): ?>
                     <div style="margin-bottom: 10px;">
-                        <img src="<?php echo imageUrl($category['icon']); ?>" alt="" style="width: 40px; height: 40px; object-fit: contain;">
+                        <img src="<?php echo htmlspecialchars($editCategoryIcon, ENT_QUOTES, 'UTF-8'); ?>" alt="" style="width: 40px; height: 40px; object-fit: contain;">
+                    </div>
+                    <?php elseif ($editCategoryIcon): ?>
+                    <div style="margin-bottom: 10px; font-size: 28px;">
+                        <?php echo htmlspecialchars($editCategoryIcon, ENT_QUOTES, 'UTF-8'); ?>
                     </div>
                     <?php endif; ?>
                     <input type="file" name="icon" class="form-control" accept="image/*">
@@ -499,6 +580,41 @@ include '../includes/header.php';
                 <div class="form-group">
                     <label class="form-label">مدة الضمان (بالأيام)</label>
                     <input type="number" name="warranty_days" class="form-control" value="<?php echo (int) ($category['warranty_days'] ?? 14); ?>" min="0" max="365">
+                </div>
+
+                <div style="border: 1px solid #e5e7eb; border-radius: 12px; padding: 14px; margin-top: 10px;">
+                    <h4 style="margin: 0 0 12px;">إعدادات المعاينة للقسم</h4>
+                    <?php
+                        $editInspectionMode = inspectionPricingNormalizeMode($category['inspection_pricing_mode'] ?? 'free', false);
+                        $editInspectionFee = inspectionPricingNormalizeFee($category['inspection_fee'] ?? 0);
+                    ?>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <label class="form-label">نوع المعاينة</label>
+                            <select name="inspection_pricing_mode" class="form-control">
+                                <option value="free" <?php echo $editInspectionMode === 'free' ? 'selected' : ''; ?>>معاينة مجانية</option>
+                                <option value="paid" <?php echo $editInspectionMode === 'paid' ? 'selected' : ''; ?>>معاينة برسوم</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">رسوم المعاينة (⃁)</label>
+                            <input type="number" step="0.01" min="0" name="inspection_fee" class="form-control" value="<?php echo htmlspecialchars((string) $editInspectionFee, ENT_QUOTES, 'UTF-8'); ?>">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">تفاصيل المعاينة بالعربي</label>
+                        <textarea name="inspection_details_ar" class="form-control" rows="2"><?php echo htmlspecialchars((string) ($category['inspection_details_ar'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px;">
+                        <div class="form-group">
+                            <label class="form-label">Details EN</label>
+                            <textarea name="inspection_details_en" class="form-control" rows="2"><?php echo htmlspecialchars((string) ($category['inspection_details_en'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
+                        </div>
+                        <div class="form-group">
+                            <label class="form-label">Details UR</label>
+                            <textarea name="inspection_details_ur" class="form-control" rows="2"><?php echo htmlspecialchars((string) ($category['inspection_details_ur'] ?? ''), ENT_QUOTES, 'UTF-8'); ?></textarea>
+                        </div>
+                    </div>
                 </div>
 
                 <div class="form-group">

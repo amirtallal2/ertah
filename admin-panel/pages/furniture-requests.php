@@ -164,9 +164,46 @@ if ($search !== '') {
 }
 
 $whereSql = !empty($where) ? 'WHERE ' . implode(' AND ', $where) : '';
+$providerSummarySelect = "'' AS assigned_provider_names, '' AS primary_provider_name";
+if (
+    specialServiceTableExists('orders')
+    && specialServiceTableExists('providers')
+    && specialServiceColumnExists('furniture_requests', 'source_order_id')
+) {
+    if (
+        specialServiceTableExists('order_providers')
+        && specialServiceColumnExists('order_providers', 'assignment_status')
+    ) {
+        $providerSummarySelect = "
+            COALESCE((
+                SELECT GROUP_CONCAT(DISTINCT p.full_name ORDER BY FIELD(op.assignment_status, 'in_progress', 'accepted', 'assigned', 'completed'), p.full_name SEPARATOR '، ')
+                FROM order_providers op
+                INNER JOIN providers p ON p.id = op.provider_id
+                WHERE op.order_id = fr.source_order_id
+                  AND op.assignment_status NOT IN ('cancelled', 'rejected')
+            ), '') AS assigned_provider_names,
+            COALESCE((
+                SELECT p2.full_name
+                FROM orders o2
+                INNER JOIN providers p2 ON p2.id = o2.provider_id
+                WHERE o2.id = fr.source_order_id
+                LIMIT 1
+            ), '') AS primary_provider_name";
+    } else {
+        $providerSummarySelect = "
+            '' AS assigned_provider_names,
+            COALESCE((
+                SELECT p2.full_name
+                FROM orders o2
+                INNER JOIN providers p2 ON p2.id = o2.provider_id
+                WHERE o2.id = fr.source_order_id
+                LIMIT 1
+            ), '') AS primary_provider_name";
+    }
+}
 
 $requests = db()->fetchAll(
-    "SELECT fr.*, fs.name_ar AS service_name, fa.name_ar AS area_display_name
+    "SELECT fr.*, fs.name_ar AS service_name, fa.name_ar AS area_display_name, {$providerSummarySelect}
      FROM furniture_requests fr
      LEFT JOIN furniture_services fs ON fs.id = fr.service_id
      LEFT JOIN furniture_areas fa ON fa.id = fr.area_id
@@ -225,6 +262,7 @@ include '../includes/header.php';
                             <th>رقم الطلب</th>
                             <th>طلب التطبيق</th>
                             <th>العميل</th>
+                            <th>مقدم الخدمة</th>
                             <th>الخدمة</th>
                             <th>المنطقة</th>
                             <th>المسار</th>
@@ -251,6 +289,24 @@ include '../includes/header.php';
                                 <td>
                                     <?php echo $row['customer_name']; ?><br>
                                     <small class="text-muted"><?php echo $row['phone']; ?></small>
+                                </td>
+                                <td>
+                                    <?php
+                                        $assignedProviderNames = trim((string) ($row['assigned_provider_names'] ?? ''));
+                                        $primaryProviderName = trim((string) ($row['primary_provider_name'] ?? ''));
+                                        $providerLabel = $assignedProviderNames !== '' ? $assignedProviderNames : $primaryProviderName;
+                                    ?>
+                                    <?php if ($providerLabel !== ''): ?>
+                                        <span class="badge badge-info">
+                                            <?php echo htmlspecialchars($providerLabel, ENT_QUOTES, 'UTF-8'); ?>
+                                        </span>
+                                    <?php elseif (!empty($row['source_order_id'])): ?>
+                                        <a href="orders.php?action=view&id=<?php echo (int) $row['source_order_id']; ?>#provider-assignment" class="badge badge-warning">
+                                            لم يتم الإسناد
+                                        </a>
+                                    <?php else: ?>
+                                        <span class="text-muted">لا يوجد طلب تطبيق</span>
+                                    <?php endif; ?>
                                 </td>
                                 <td><?php echo $row['service_name'] ?: '<span class="text-muted">غير محدد</span>'; ?></td>
                                 <td><?php echo $row['area_display_name'] ?: ($row['area_name'] ?: '<span class="text-muted">غير محدد</span>'); ?></td>
@@ -285,6 +341,9 @@ include '../includes/header.php';
                                             <a href="orders.php?action=view&id=<?php echo (int) $row['source_order_id']; ?>" class="btn btn-sm btn-outline" title="معاينة الطلب">
                                                 <i class="fas fa-eye"></i>
                                             </a>
+                                            <a href="orders.php?action=view&id=<?php echo (int) $row['source_order_id']; ?>#provider-assignment" class="btn btn-sm btn-secondary" title="إسناد مقدم خدمة">
+                                                <i class="fas fa-user-check"></i>
+                                            </a>
                                         <?php endif; ?>
                                         <a href="?action=edit&id=<?php echo $row['id']; ?>" class="btn btn-sm btn-outline">
                                             <i class="fas fa-edit"></i>
@@ -300,7 +359,7 @@ include '../includes/header.php';
                         <?php endforeach; ?>
                         <?php if (empty($requests)): ?>
                             <tr>
-                                <td colspan="11" class="text-center">لا توجد طلبات حالياً</td>
+                                <td colspan="12" class="text-center">لا توجد طلبات حالياً</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>

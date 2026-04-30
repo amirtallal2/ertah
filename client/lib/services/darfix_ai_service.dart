@@ -1,9 +1,6 @@
-import 'dart:convert';
-
-import 'package:http/http.dart' as http;
-
 import '../providers/auth_provider.dart';
 import '../providers/location_provider.dart';
+import 'api_service.dart';
 import 'home_service.dart';
 import 'offers_service.dart';
 import 'orders_service.dart';
@@ -31,18 +28,7 @@ class DarfixAiReply {
 }
 
 class DarfixAiService {
-  static const String _chatEndpoint =
-      'https://api.us-west-2.modal.direct/v1/chat/completions';
-  static const String _model = String.fromEnvironment(
-    'DARFIX_AI_MODEL',
-    defaultValue: 'zai-org/GLM-5-FP8',
-  );
-  static const String _apiKey = String.fromEnvironment(
-    'DARFIX_AI_API_KEY',
-    defaultValue:
-        'modalresearch_yjGu-_89u70CljD8gI2xuUP7gDQIa-Y63uojEtC9Tso',
-  );
-
+  final ApiService _api = ApiService();
   final HomeService _homeService = HomeService();
   final SettingsService _settingsService = SettingsService();
   final OffersService _offersService = OffersService();
@@ -57,53 +43,36 @@ class DarfixAiService {
     required AuthProvider authProvider,
     required LocationProvider locationProvider,
   }) async {
-    if (_apiKey.trim().isEmpty) {
-      throw Exception('DARFIX_AI_API_KEY is empty');
-    }
-
     final liveSnapshot = await _buildLiveSnapshot(
       localeCode: localeCode,
       authProvider: authProvider,
       locationProvider: locationProvider,
     );
 
-    final messages = <Map<String, String>>[
-      {
-        'role': 'system',
-        'content': _systemPrompt(
-          localeCode: localeCode,
-          liveSnapshotJson: const JsonEncoder.withIndent('  ').convert(
-            liveSnapshot,
-          ),
-        ),
+    final response = await _api.post(
+      '/mobile/ai.php?action=chat',
+      body: {
+        'message': userMessage.trim(),
+        'locale': localeCode,
+        'history': history
+            .where((message) => message.content.trim().isNotEmpty)
+            .take(12)
+            .map((message) => message.toJson())
+            .toList(),
+        'live_snapshot': liveSnapshot,
       },
-      ...history
-          .where((message) => message.content.trim().isNotEmpty)
-          .take(12)
-          .map((message) => message.toJson()),
-      {'role': 'user', 'content': userMessage.trim()},
-    ];
-
-    final response = await http.post(
-      Uri.parse(_chatEndpoint),
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer $_apiKey',
-      },
-      body: jsonEncode({
-        'model': _model,
-        'messages': messages,
-        'max_tokens': 500,
-      }),
     );
 
-    final decodedBody = utf8.decode(response.bodyBytes, allowMalformed: true);
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-      throw Exception(decodedBody.trim().isEmpty ? response.statusCode : decodedBody.trim());
+    if (!response.success) {
+      throw Exception(
+        (response.message ?? '').trim().isEmpty
+            ? 'Darfix AI request failed'
+            : response.message!.trim(),
+      );
     }
 
-    final payload = jsonDecode(decodedBody);
-    final content = _extractAssistantMessage(payload);
+    final payload = _mapFromDynamic(response.data) ?? <String, dynamic>{};
+    final content = (payload['content'] ?? '').toString().trim();
     if (content.isEmpty) {
       throw Exception('Empty AI response');
     }
@@ -417,47 +386,5 @@ class DarfixAiService {
       }
     }
     return '';
-  }
-
-  String _extractAssistantMessage(dynamic payload) {
-    if (payload is! Map) return '';
-    final choices = payload['choices'];
-    if (choices is! List || choices.isEmpty) return '';
-    final first = choices.first;
-    if (first is! Map) return '';
-    final message = first['message'];
-    if (message is! Map) return '';
-    final content = message['content'];
-    if (content is String) {
-      return content.trim();
-    }
-    if (content is List) {
-      return content
-          .whereType<Map>()
-          .map((item) => item['text']?.toString() ?? '')
-          .where((text) => text.trim().isNotEmpty)
-          .join('\n')
-          .trim();
-    }
-    return '';
-  }
-
-  String _systemPrompt({
-    required String localeCode,
-    required String liveSnapshotJson,
-  }) {
-    return '''
-You are Darfix AI inside the Darfix customer app.
-Use the live application snapshot below as your primary source of truth.
-Do not invent prices, offers, stores, services, orders, balances, or support details.
-If a requested fact is not present in the live snapshot, say clearly that the current live data available to you does not include it.
-Prefer concise, practical answers.
-Reply in the same language as the latest user message unless they explicitly ask for another language.
-If the user asks about their account, recent orders, wallet, or profile, use the authenticated user data when available.
-Current app locale: $localeCode
-
-Live app snapshot:
-$liveSnapshotJson
-''';
   }
 }

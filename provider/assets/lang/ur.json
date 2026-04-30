@@ -514,6 +514,9 @@
     "parts_cost_label": "پرزہ جات کی لاگت",
     "problem_type_label": "مسئلے کی قسم",
     "problem_type_not_specified": "متعین نہیں",
+    "inspection_fee_label": "معائنہ فیس",
+    "inspection_details_label": "معائنے کی تفصیل",
+    "order_inspection_free": "مفت معائنہ",
     "reject_order": "آرڈر مسترد کریں",
     "save_estimate": "تخمینہ محفوظ کریں",
     "send_invoice_for_approval": "منظوری کے لیے انوائس بھیجیں",
@@ -554,5 +557,8 @@
     "provider_invoice_item_source_catalog": "فہرست سے",
     "provider_invoice_report": "انوائس رپورٹ",
     "provider_spare_part_default_name": "پارٹ",
+    "provider_finance_pending": "زیر التوا",
+    "provider_finance_transferred": "منتقل شدہ",
+    "provider_finance_deductions": "کٹوتیاں",
     "provider_invoice_total": "کل"
 }

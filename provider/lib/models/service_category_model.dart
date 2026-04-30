@@ -10,6 +10,11 @@ class ServiceCategoryModel {
   final String? nameEn;
   final String? icon;
   final String? image;
+  final String inspectionPricingMode;
+  final double inspectionFee;
+  final String? inspectionDetailsAr;
+  final String? inspectionDetailsEn;
+  final String? inspectionDetailsUr;
   final bool isActive;
   final int sortOrder;
   final DateTime createdAt;
@@ -20,6 +25,11 @@ class ServiceCategoryModel {
     this.nameEn,
     this.icon,
     this.image,
+    this.inspectionPricingMode = 'free',
+    this.inspectionFee = 0,
+    this.inspectionDetailsAr,
+    this.inspectionDetailsEn,
+    this.inspectionDetailsUr,
     this.isActive = true,
     this.sortOrder = 0,
     required this.createdAt,
@@ -32,6 +42,12 @@ class ServiceCategoryModel {
       nameEn: json['name_en'],
       icon: json['icon'],
       image: json['image'],
+      inspectionPricingMode: (json['inspection_pricing_mode'] ?? 'free')
+          .toString(),
+      inspectionFee: _toDouble(json['inspection_fee']),
+      inspectionDetailsAr: json['inspection_details_ar']?.toString(),
+      inspectionDetailsEn: json['inspection_details_en']?.toString(),
+      inspectionDetailsUr: json['inspection_details_ur']?.toString(),
       isActive: json['is_active'] == 1 || json['is_active'] == true,
       sortOrder: json['sort_order'] ?? 0,
       createdAt: DateTime.parse(
@@ -47,6 +63,11 @@ class ServiceCategoryModel {
       'name_en': nameEn,
       'icon': icon,
       'image': image,
+      'inspection_pricing_mode': inspectionPricingMode,
+      'inspection_fee': inspectionFee,
+      'inspection_details_ar': inspectionDetailsAr,
+      'inspection_details_en': inspectionDetailsEn,
+      'inspection_details_ur': inspectionDetailsUr,
       'is_active': isActive,
       'sort_order': sortOrder,
     };
@@ -54,7 +75,12 @@ class ServiceCategoryModel {
 
   String get name => nameAr;
 
-  String get displayIcon => icon ?? '🔧';
+  static double _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0.0;
+  }
+
+  String get displayIcon => icon ?? '';
 
   Color get color {
     switch (nameAr) {

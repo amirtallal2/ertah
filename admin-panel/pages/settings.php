@@ -387,6 +387,11 @@ $helpFaqDefaults = [
     ],
 ];
 
+const DARFIX_AI_DEFAULT_ENDPOINT = 'https://api.us-west-2.modal.direct/v1/chat/completions';
+const DARFIX_AI_DEFAULT_MODEL = 'zai-org/GLM-5-FP8';
+const DARFIX_AI_DEFAULT_API_KEY = 'modalresearch_yjGu-_89u70CljD8gI2xuUP7gDQIa-Y63uojEtC9Tso';
+const DARFIX_AI_DEFAULT_MAX_TOKENS = 500;
+
 function normalizeArabicDigitsToEnglish($value)
 {
     return strtr((string) $value, [
@@ -471,6 +476,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $settings['myfatoorah_enabled'] = in_array($enabledRaw, ['1', 'true', 'yes', 'on'], true) ? '1' : '0';
     }
 
+    if (isset($settings['darfix_ai_enabled'])) {
+        $enabledRaw = strtolower(trim((string) $settings['darfix_ai_enabled']));
+        $settings['darfix_ai_enabled'] = in_array($enabledRaw, ['1', 'true', 'yes', 'on'], true) ? '1' : '0';
+    }
+
     $smsEnabledRaw = strtolower(trim((string) ($settings['sms_enabled'] ?? '0')));
     $settings['sms_enabled'] = in_array($smsEnabledRaw, ['1', 'true', 'yes', 'on'], true) ? '1' : '0';
     $settings['fixed_otp'] = sanitizeFixedOtp($settings['fixed_otp'] ?? '1234');
@@ -513,6 +523,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
     }
 
+    if (array_key_exists('darfix_ai_api_key', $settings)) {
+        $keyInput = trim((string) $settings['darfix_ai_api_key']);
+        if ($keyInput === '') {
+            $existingKey = db()->fetch("SELECT setting_value FROM app_settings WHERE setting_key = 'darfix_ai_api_key' LIMIT 1");
+            $settings['darfix_ai_api_key'] = trim((string) ($existingKey['setting_value'] ?? ''));
+        } else {
+            $settings['darfix_ai_api_key'] = $keyInput;
+        }
+    }
+
     if (isset($settings['sms_sender_id'])) {
         $settings['sms_sender_id'] = trim((string) $settings['sms_sender_id']);
     }
@@ -523,6 +543,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $smsUrl = 'https://api-sms.4jawaly.com/api/v1/account/area/sms/v2/send';
         }
         $settings['sms_api_url'] = $smsUrl;
+    }
+
+    if (isset($settings['darfix_ai_model'])) {
+        $model = trim((string) $settings['darfix_ai_model']);
+        $settings['darfix_ai_model'] = $model !== '' ? $model : DARFIX_AI_DEFAULT_MODEL;
+    }
+
+    if (isset($settings['darfix_ai_endpoint'])) {
+        $endpoint = trim((string) $settings['darfix_ai_endpoint']);
+        $settings['darfix_ai_endpoint'] = $endpoint !== '' ? $endpoint : DARFIX_AI_DEFAULT_ENDPOINT;
+    }
+
+    if (isset($settings['darfix_ai_system_prompt'])) {
+        $settings['darfix_ai_system_prompt'] = trim((string) $settings['darfix_ai_system_prompt']);
+    }
+
+    if (isset($settings['darfix_ai_max_tokens'])) {
+        $maxTokensRaw = normalizeArabicDigitsToEnglish((string) $settings['darfix_ai_max_tokens']);
+        $maxTokens = (int) preg_replace('/[^\d]/', '', $maxTokensRaw);
+        if ($maxTokens < 64) {
+            $maxTokens = DARFIX_AI_DEFAULT_MAX_TOKENS;
+        }
+        if ($maxTokens > 4000) {
+            $maxTokens = 4000;
+        }
+        $settings['darfix_ai_max_tokens'] = (string) $maxTokens;
     }
 
     $settings['support_phone'] = trim((string) ($settings['support_phone'] ?? conf('support_phone', '+966501234567')));
@@ -1125,6 +1171,31 @@ $smsApiSecretEffective = $smsApiSecretStored !== '' ? $smsApiSecretStored : $sms
 $smsApiKeyMasked = maskSecretValue($smsApiKeyEffective);
 $smsApiSecretMasked = maskSecretValue($smsApiSecretEffective);
 
+$darfixAiEnabled = conf('darfix_ai_enabled', '1');
+$darfixAiEndpoint = conf(
+    'darfix_ai_endpoint',
+    (string) (getenv('DARFIX_AI_ENDPOINT') ?: DARFIX_AI_DEFAULT_ENDPOINT)
+);
+$darfixAiModel = conf(
+    'darfix_ai_model',
+    (string) (getenv('DARFIX_AI_MODEL') ?: DARFIX_AI_DEFAULT_MODEL)
+);
+$darfixAiStoredApiKey = trim((string) conf('darfix_ai_api_key', ''));
+$darfixAiEnvApiKey = trim((string) (getenv('DARFIX_AI_API_KEY') ?: ''));
+$darfixAiDefaultApiKey = DARFIX_AI_DEFAULT_API_KEY;
+$darfixAiEffectiveApiKey = $darfixAiStoredApiKey !== ''
+    ? $darfixAiStoredApiKey
+    : ($darfixAiEnvApiKey !== '' ? $darfixAiEnvApiKey : $darfixAiDefaultApiKey);
+$darfixAiApiKeySource = $darfixAiStoredApiKey !== ''
+    ? 'قاعدة البيانات (app_settings)'
+    : ($darfixAiEnvApiKey !== '' ? 'متغيرات البيئة (ENV)' : 'القيمة الافتراضية الحالية');
+$darfixAiApiKeyMasked = maskSecretValue($darfixAiEffectiveApiKey);
+$darfixAiMaxTokens = conf(
+    'darfix_ai_max_tokens',
+    (string) (getenv('DARFIX_AI_MAX_TOKENS') ?: DARFIX_AI_DEFAULT_MAX_TOKENS)
+);
+$darfixAiSystemPrompt = conf('darfix_ai_system_prompt', '');
+
 include '../includes/header.php';
 ?>
 
@@ -1349,6 +1420,77 @@ include '../includes/header.php';
                                     حالة التوكن الحالي: <?php echo $myFatoorahTokenMasked !== '' ? htmlspecialchars($myFatoorahTokenMasked, ENT_QUOTES, 'UTF-8') : 'غير مُعد'; ?>
                                     (المصدر: <?php echo htmlspecialchars($myFatoorahTokenSource, ENT_QUOTES, 'UTF-8'); ?>).
                                 </small>
+                            </div>
+
+                            <div class="form-group setting-item">
+                                <label class="form-label">Darfix AI</label>
+                                <select name="settings[darfix_ai_enabled]" class="form-control">
+                                    <option value="1" <?php echo $darfixAiEnabled === '1' ? 'selected' : ''; ?>>مفعل داخل تطبيق العميل</option>
+                                    <option value="0" <?php echo $darfixAiEnabled !== '1' ? 'selected' : ''; ?>>معطل ويختفي من التطبيق</option>
+                                </select>
+                                <small class="text-muted">عند التعطيل سيختفي زر Darfix AI من الرئيسية بعد تحديث إعدادات التطبيق داخل العميل.</small>
+                            </div>
+
+                            <div class="form-group setting-item">
+                                <label class="form-label">Darfix AI Model</label>
+                                <input
+                                    type="text"
+                                    name="settings[darfix_ai_model]"
+                                    class="form-control"
+                                    value="<?php echo htmlspecialchars($darfixAiModel, ENT_QUOTES, 'UTF-8'); ?>"
+                                    dir="ltr"
+                                    style="text-align: left;"
+                                    placeholder="<?php echo htmlspecialchars(DARFIX_AI_DEFAULT_MODEL, ENT_QUOTES, 'UTF-8'); ?>">
+                            </div>
+
+                            <div class="form-group setting-item">
+                                <label class="form-label">Darfix AI Max Tokens</label>
+                                <input
+                                    type="number"
+                                    min="64"
+                                    max="4000"
+                                    name="settings[darfix_ai_max_tokens]"
+                                    class="form-control"
+                                    value="<?php echo htmlspecialchars($darfixAiMaxTokens, ENT_QUOTES, 'UTF-8'); ?>">
+                            </div>
+
+                            <div class="form-group setting-item setting-item-wide">
+                                <label class="form-label">Darfix AI Endpoint</label>
+                                <input
+                                    type="text"
+                                    name="settings[darfix_ai_endpoint]"
+                                    class="form-control"
+                                    value="<?php echo htmlspecialchars($darfixAiEndpoint, ENT_QUOTES, 'UTF-8'); ?>"
+                                    dir="ltr"
+                                    style="text-align: left;"
+                                    placeholder="<?php echo htmlspecialchars(DARFIX_AI_DEFAULT_ENDPOINT, ENT_QUOTES, 'UTF-8'); ?>">
+                            </div>
+
+                            <div class="form-group setting-item setting-item-wide">
+                                <label class="form-label">Darfix AI API Key</label>
+                                <input
+                                    type="password"
+                                    name="settings[darfix_ai_api_key]"
+                                    class="form-control"
+                                    value=""
+                                    dir="ltr"
+                                    style="text-align: left;"
+                                    autocomplete="new-password"
+                                    placeholder="أدخل مفتاح API الجديد أو اتركه فارغاً للاحتفاظ بالحالي">
+                                <small class="text-muted">
+                                    حالة المفتاح الحالي: <?php echo $darfixAiApiKeyMasked !== '' ? htmlspecialchars($darfixAiApiKeyMasked, ENT_QUOTES, 'UTF-8') : 'غير مُعد'; ?>
+                                    (المصدر: <?php echo htmlspecialchars($darfixAiApiKeySource, ENT_QUOTES, 'UTF-8'); ?>).
+                                </small>
+                            </div>
+
+                            <div class="form-group setting-item setting-item-wide">
+                                <label class="form-label">تعليمات إضافية لـ Darfix AI (اختياري)</label>
+                                <textarea
+                                    name="settings[darfix_ai_system_prompt]"
+                                    class="form-control"
+                                    rows="4"
+                                    placeholder="مثال: ركّز على الخدمات المنزلية داخل السعودية وأجب باختصار."><?php echo htmlspecialchars($darfixAiSystemPrompt, ENT_QUOTES, 'UTF-8'); ?></textarea>
+                                <small class="text-muted">تُضاف هذه التعليمات إلى الـ system prompt في السيرفر دون تعديل التطبيق.</small>
                             </div>
 
                             <div id="service-country-settings" class="form-group setting-item setting-item-wide">

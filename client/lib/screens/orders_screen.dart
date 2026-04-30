@@ -66,6 +66,53 @@ class _OrdersScreenState extends State<OrdersScreen>
     super.dispose();
   }
 
+  bool _looksLikeMediaValue(String value) {
+    final normalized = value.trim();
+    if (normalized.isEmpty) return false;
+    if (normalized.startsWith('http')) return true;
+    if (normalized.contains('/') || normalized.contains('\\')) return true;
+    return RegExp(
+      r'\.(png|jpe?g|gif|webp|svg|avif)$',
+      caseSensitive: false,
+    ).hasMatch(normalized);
+  }
+
+  String _categoryMediaUrl(Map<String, dynamic> order) {
+    final image = (order['category_image'] ?? '').toString().trim();
+    final icon = (order['category_icon'] ?? '').toString().trim();
+    for (final value in <String>[image, icon]) {
+      if (_looksLikeMediaValue(value)) {
+        return AppConfig.fixMediaUrl(value);
+      }
+    }
+    return '';
+  }
+
+  String _categorySymbol(Map<String, dynamic> order) {
+    final icon = (order['category_icon'] ?? '').toString().trim();
+    if (icon.isEmpty || _looksLikeMediaValue(icon)) {
+      return '';
+    }
+    return icon;
+  }
+
+  Widget _buildCategoryVisual(Map<String, dynamic> order) {
+    final mediaUrl = _categoryMediaUrl(order);
+    final symbol = _categorySymbol(order);
+    if (mediaUrl.isNotEmpty) {
+      return CachedNetworkImage(
+        imageUrl: mediaUrl,
+        fit: BoxFit.contain,
+        errorWidget: (_, __, ___) =>
+            const Icon(Icons.category_outlined, color: AppColors.primary),
+      );
+    }
+    if (symbol.isNotEmpty) {
+      return Center(child: Text(symbol, style: const TextStyle(fontSize: 24)));
+    }
+    return const Icon(Icons.category_outlined, color: AppColors.primary);
+  }
+
   Future<void> _fetchOrders() async {
     if (!mounted) return;
     setState(() => _isLoading = true);
@@ -261,7 +308,10 @@ class _OrdersScreenState extends State<OrdersScreen>
                 id: int.tryParse('${order['category_id'] ?? 0}') ?? 0,
                 nameAr: serviceTitle,
                 nameEn: serviceTitle,
-                icon: (order['category_icon'] ?? '').toString(),
+                icon: _categoryMediaUrl(order).isNotEmpty
+                    ? _categoryMediaUrl(order)
+                    : _categorySymbol(order),
+                image: _categoryMediaUrl(order),
                 createdAt: DateTime.now(),
               ),
               orderId: trackingOrderId.toString(),
@@ -294,14 +344,7 @@ class _OrdersScreenState extends State<OrdersScreen>
                     borderRadius: BorderRadius.circular(12),
                   ),
                   padding: const EdgeInsets.all(8),
-                  child: order['category_icon'] != null
-                      ? CachedNetworkImage(
-                          imageUrl: AppConfig.fixMediaUrl(
-                            order['category_icon'],
-                          ),
-                          fit: BoxFit.contain,
-                        )
-                      : const Icon(Icons.build, color: AppColors.primary),
+                  child: _buildCategoryVisual(order),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -428,7 +471,10 @@ class _OrdersScreenState extends State<OrdersScreen>
                               id: 0,
                               nameAr: serviceTitle,
                               nameEn: '',
-                              icon: order['category_icon'] ?? '',
+                              icon: _categoryMediaUrl(order).isNotEmpty
+                                  ? _categoryMediaUrl(order)
+                                  : _categorySymbol(order),
+                              image: _categoryMediaUrl(order),
                               createdAt: DateTime.now(),
                             ),
                             providerName:

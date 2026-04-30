@@ -16,9 +16,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 
 require_once __DIR__ . '/../../includes/functions.php';
 require_once __DIR__ . '/../../includes/database.php';
+require_once __DIR__ . '/../../includes/provider_finance.php';
 require_once __DIR__ . '/../../includes/special_services.php';
 require_once __DIR__ . '/../../includes/service_areas.php';
 require_once __DIR__ . '/../../includes/spare_parts_scope.php';
+require_once __DIR__ . '/../../includes/inspection_pricing.php';
 require_once __DIR__ . '/../../includes/notification_service.php';
 require_once __DIR__ . '/../config/database.php';
 require_once __DIR__ . '/../helpers/response.php';
@@ -167,6 +169,15 @@ function buildOrdersApiThrowableMessage(Throwable $e)
     }
 
     return 'تعذر إتمام طلب الخدمة حالياً بسبب مشكلة تقنية مؤقتة.';
+}
+
+function syncProviderFinanceForOrderSafe(int $orderId): void
+{
+    try {
+        providerFinanceSyncOrder($orderId);
+    } catch (Throwable $e) {
+        error_log('Provider finance order sync failed for order ' . $orderId . ': ' . $e->getMessage());
+    }
 }
 
 function ordersCoverageAreaIds(array $coverage): array
@@ -836,6 +847,162 @@ function decodeOrderProblemDetailsPayload($problemDetailsRaw): array
     return is_array($decoded) ? $decoded : [];
 }
 
+function normalizeProblemTypeLabelsFromDetails($details): array
+{
+    if ($details instanceof stdClass) {
+        $details = (array) $details;
+    }
+
+    if (!is_array($details)) {
+        return [];
+    }
+
+    $labels = [];
+    $append = static function ($value) use (&$labels, &$append) {
+        if ($value === null) {
+            return;
+        }
+
+        if ($value instanceof stdClass) {
+            $value = (array) $value;
+        }
+
+        if (is_string($value)) {
+            $trimmed = trim($value);
+            if ($trimmed === '') {
+                return;
+            }
+
+            $decoded = json_decode($trimmed, true);
+            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                $append($decoded);
+                return;
+            }
+
+            $parts = preg_split('/\s*[,،]\s*/u', $trimmed) ?: [$trimmed];
+            foreach ($parts as $part) {
+                $label = trim((string) $part);
+                if ($label !== '' && !in_array($label, $labels, true)) {
+                    $labels[] = $label;
+                }
+            }
+            return;
+        }
+
+        if (!is_array($value)) {
+            $label = trim((string) $value);
+            if ($label !== '' && !in_array($label, $labels, true)) {
+                $labels[] = $label;
+            }
+            return;
+        }
+
+        $candidate = '';
+        foreach (['title_ar', 'name_ar', 'title', 'name', 'type', 'title_en', 'name_en', 'title_ur', 'name_ur'] as $key) {
+            if (!isset($value[$key])) {
+                continue;
+            }
+            $candidate = trim((string) $value[$key]);
+            if ($candidate !== '') {
+                break;
+            }
+        }
+
+        if ($candidate !== '') {
+            if (!in_array($candidate, $labels, true)) {
+                $labels[] = $candidate;
+            }
+            return;
+        }
+
+        foreach ($value as $item) {
+            $append($item);
+        }
+    };
+
+    foreach (['problem_type_labels', 'problem_types', 'types', 'problem_type_titles', 'selected_problem_types'] as $key) {
+        if (array_key_exists($key, $details)) {
+            $append($details[$key]);
+        }
+    }
+
+    return $labels;
+}
+
+function normalizeProblemTypeIdsFromDetails($details, $fallbackId = null): array
+{
+    if ($details instanceof stdClass) {
+        $details = (array) $details;
+    }
+
+    if (!is_array($details)) {
+        $details = [];
+    }
+
+    $ids = array_merge(
+        normalizeIntegerIds($details['problem_type_ids'] ?? []),
+        normalizeIntegerIds($details['type_option_ids'] ?? [])
+    );
+
+    if (!empty($details['type_option_id'])) {
+        $ids = array_merge($ids, normalizeIntegerIds($details['type_option_id']));
+    }
+
+    if ($fallbackId !== null && $fallbackId !== '') {
+        $ids = array_merge($ids, normalizeIntegerIds($fallbackId));
+    }
+
+    return array_values(array_unique(array_filter(array_map('intval', $ids), static fn($id) => $id > 0)));
+}
+
+function fetchProblemTypeLabelsByIds(array $ids): array
+{
+    global $conn;
+
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn($id) => $id > 0)));
+    if (empty($ids) || !tableExists('problem_detail_options')) {
+        return [];
+    }
+
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $stmt = $conn->prepare(
+        "SELECT id, title_ar, title_en, title_ur
+         FROM problem_detail_options
+         WHERE id IN ($placeholders)"
+    );
+    if (!$stmt) {
+        return [];
+    }
+
+    $types = str_repeat('i', count($ids));
+    $stmt->bind_param($types, ...$ids);
+    $stmt->execute();
+    $result = $stmt->get_result();
+
+    $labelsById = [];
+    while ($row = $result->fetch_assoc()) {
+        $label = trim((string) ($row['title_ar'] ?? ''));
+        if ($label === '') {
+            $label = trim((string) ($row['title_en'] ?? ''));
+        }
+        if ($label === '') {
+            $label = trim((string) ($row['title_ur'] ?? ''));
+        }
+        if ($label !== '') {
+            $labelsById[(int) $row['id']] = $label;
+        }
+    }
+
+    $labels = [];
+    foreach ($ids as $id) {
+        if (!empty($labelsById[$id]) && !in_array($labelsById[$id], $labels, true)) {
+            $labels[] = $labelsById[$id];
+        }
+    }
+
+    return $labels;
+}
+
 function isSparePartsWithInstallationOrderPayload($problemDetailsRaw): bool
 {
     $details = decodeOrderProblemDetailsPayload($problemDetailsRaw);
@@ -985,7 +1152,7 @@ function getOrders()
 
     // Get orders
     $sql = "SELECT o.*, 
-            c.name_ar as category_name, c.icon as category_icon,
+            c.name_ar as category_name, c.icon as category_icon, c.image as category_image,
             p.full_name as provider_name, p.avatar as provider_avatar, p.rating as provider_rating,
             p.phone as provider_phone, p.email as provider_email, p.status as provider_status,
             p.is_available as provider_is_available
@@ -1103,7 +1270,7 @@ function getOrderDetail()
     }
 
     $sql = "SELECT o.*,
-            c.name_ar as category_name, c.icon as category_icon,
+            c.name_ar as category_name, c.icon as category_icon, c.image as category_image,
             u.full_name as user_name, u.phone as user_phone, u.avatar as user_avatar,
             p.full_name as provider_name, p.avatar as provider_avatar, p.rating as provider_rating,
             p.phone as provider_phone, p.email as provider_email, p.status as provider_status,
@@ -1375,7 +1542,7 @@ function providerAssignmentResponse($input)
 
     $stmt = $conn->prepare(
         "SELECT o.*,
-                c.name_ar AS category_name, c.icon AS category_icon,
+                c.name_ar AS category_name, c.icon AS category_icon, c.image AS category_image,
                 p.full_name AS provider_name, p.avatar AS provider_avatar, p.rating AS provider_rating,
                 p.phone AS provider_phone, p.email AS provider_email, p.status AS provider_status,
                 p.is_available AS provider_is_available
@@ -1641,7 +1808,7 @@ function providerUpdateOrderStatus($input)
 
     $stmt = $conn->prepare(
         "SELECT o.*,
-                c.name_ar AS category_name, c.icon AS category_icon,
+                c.name_ar AS category_name, c.icon AS category_icon, c.image AS category_image,
                 p.full_name AS provider_name, p.avatar AS provider_avatar, p.rating AS provider_rating,
                 p.phone AS provider_phone, p.email AS provider_email, p.status AS provider_status,
                 p.is_available AS provider_is_available
@@ -1935,6 +2102,7 @@ function startJob($input)
         setProviderAssignmentStatus($orderId, $providerId, 'in_progress');
 
         $conn->commit();
+        syncProviderFinanceForOrderSafe($orderId);
         notifyUserOrderEvent(
             (int) ($res['user_id'] ?? 0),
             $orderId,
@@ -2130,6 +2298,7 @@ function completeJob($input)
         setProviderAssignmentStatus($orderId, $providerId, 'completed');
 
         $conn->commit();
+        syncProviderFinanceForOrderSafe($orderId);
         notifyUserOrderEvent(
             (int) ($res['user_id'] ?? 0),
             $orderId,
@@ -2229,6 +2398,7 @@ function createOrder($input)
     ensureSpecialServicesSchema();
     serviceAreaEnsureServiceLinksSchema();
     sparePartScopeEnsureSchema();
+    inspectionPricingEnsureSchema();
 
     $categoryId = (int) ($input['category_id'] ?? 0);
     $address = trim((string) ($input['address'] ?? ''));
@@ -2400,6 +2570,12 @@ function createOrder($input)
         }
     }
 
+    $inspectionPolicy = inspectionPricingResolveForOrder($categoryId, $serviceIds);
+    $inspectionFee = inspectionPricingNormalizeFee($inspectionPolicy['fee'] ?? 0);
+    $problemDetails['inspection_policy'] = $inspectionPolicy;
+    $problemDetails['inspection_fee'] = $inspectionFee;
+    $problemDetails['is_free_inspection'] = $inspectionFee <= 0;
+
     $problemType = strtolower(trim((string) ($problemDetails['type'] ?? '')));
     $isSparePartsRequest = !empty($requestedSpareParts)
         || in_array($problemType, ['spare_parts_with_installation', 'spare_parts_order', 'spare_parts'], true);
@@ -2489,13 +2665,13 @@ function createOrder($input)
     }
 
     $orderId = $conn->insert_id;
-    applyOrderLifecycleDefaults($orderId, $scheduledDate, $scheduledTime);
+    applyOrderLifecycleDefaults($orderId, $scheduledDate, $scheduledTime, $inspectionFee);
     persistOrderServiceItems($orderId, $serviceIds, $isCustomService ? $customServiceTitle : '', $customServiceDescription);
     persistOrderRequestedSpareParts($orderId, $requestedSpareParts, $problemDetails, $categoryId);
     syncSpecialServiceRequestFromOrder($orderId, $userId, $problemDetails, $uploadedFiles, $notes, $address);
 
     // Get the created order
-    $sql = "SELECT o.*, c.name_ar as category_name, c.icon as category_icon,
+    $sql = "SELECT o.*, c.name_ar as category_name, c.icon as category_icon, c.image as category_image,
             p.full_name as provider_name, p.avatar as provider_avatar, p.rating as provider_rating,
             p.phone as provider_phone, p.email as provider_email, p.status as provider_status,
             p.is_available as provider_is_available
@@ -3211,6 +3387,7 @@ function executeMyFatoorahPayment($input)
             persistOrderPromoPricing($orderId, $userId, $pricing);
             incrementPromoUsageIfPresent($pricing['promo_code'] ?? null, $userId, $orderId, (int) ($pricing['promo_id'] ?? 0));
             $conn->commit();
+            syncProviderFinanceForOrderSafe($orderId);
         } catch (Throwable $e) {
             $conn->rollback();
             sendError($e->getMessage(), 422);
@@ -3454,6 +3631,7 @@ function markOrderAsPaidFromGateway($orderId, $userId, $amount, $reference)
         }
 
         $conn->commit();
+        syncProviderFinanceForOrderSafe($orderId);
 
         if (!$wasPaid) {
             notifyUserOrderEvent(
@@ -3900,6 +4078,7 @@ function payOrder($input)
         incrementPromoUsageIfPresent($pricing['promo_code'] ?? null, $userId, $orderId, (int) ($pricing['promo_id'] ?? 0));
 
         $conn->commit();
+        syncProviderFinanceForOrderSafe($orderId);
     } catch (Throwable $e) {
         $conn->rollback();
         sendError($e->getMessage(), 422);
@@ -4787,6 +4966,133 @@ function fetchProviderWhatsAppNumber($providerId, $fallbackPhone = null)
     return $fallback !== '' ? $fallback : null;
 }
 
+function fetchOrderContainerStoreAssignment($orderId, array $problemDetails = []): ?array
+{
+    global $conn;
+
+    $orderId = (int) $orderId;
+    if (!tableExists('container_stores')) {
+        return null;
+    }
+
+    $storeRow = null;
+    $requestId = null;
+
+    if (
+        $orderId > 0
+        && tableExists('container_requests')
+        && tableColumnExists('container_requests', 'source_order_id')
+    ) {
+        $sql = "SELECT cr.id AS request_id,
+                       cr.container_store_id,
+                       cr.container_service_id,
+                       cst.id AS store_id,
+                       cst.name_ar,
+                       cst.name_en,
+                       cst.name_ur,
+                       cst.contact_person,
+                       cst.phone,
+                       cst.email,
+                       cst.address,
+                       cst.logo,
+                       cst.notes,
+                       cst.is_active
+                FROM container_requests cr
+                LEFT JOIN container_services cs ON cs.id = cr.container_service_id
+                LEFT JOIN container_stores cst ON cst.id = COALESCE(cr.container_store_id, cs.store_id)
+                WHERE cr.source_order_id = ?
+                LIMIT 1";
+        $stmt = $conn->prepare($sql);
+        if ($stmt) {
+            $stmt->bind_param("i", $orderId);
+            $stmt->execute();
+            $row = $stmt->get_result()->fetch_assoc();
+            if ($row) {
+                $requestId = (int) ($row['request_id'] ?? 0);
+                if (!empty($row['store_id'])) {
+                    $storeRow = $row;
+                }
+            }
+            $stmt->close();
+        }
+    }
+
+    if (!$storeRow) {
+        $containerRequest = $problemDetails['container_request'] ?? [];
+        if ($containerRequest instanceof stdClass) {
+            $containerRequest = (array) $containerRequest;
+        }
+        if (!is_array($containerRequest)) {
+            $containerRequest = [];
+        }
+
+        $storeId = (int) (
+            $containerRequest['container_store_id']
+            ?? $containerRequest['store_id']
+            ?? $problemDetails['container_store_id']
+            ?? 0
+        );
+
+        if ($storeId <= 0) {
+            $serviceId = (int) (
+                $containerRequest['container_service_id']
+                ?? $problemDetails['container_service_id']
+                ?? 0
+            );
+            if ($serviceId > 0 && tableExists('container_services') && tableColumnExists('container_services', 'store_id')) {
+                $serviceStmt = $conn->prepare("SELECT store_id FROM container_services WHERE id = ? LIMIT 1");
+                if ($serviceStmt) {
+                    $serviceStmt->bind_param("i", $serviceId);
+                    $serviceStmt->execute();
+                    $serviceRow = $serviceStmt->get_result()->fetch_assoc();
+                    $storeId = (int) ($serviceRow['store_id'] ?? 0);
+                    $serviceStmt->close();
+                }
+            }
+        }
+
+        if ($storeId > 0) {
+            $stmt = $conn->prepare(
+                "SELECT id AS store_id, name_ar, name_en, name_ur, contact_person, phone, email, address, logo, notes, is_active
+                 FROM container_stores
+                 WHERE id = ?
+                 LIMIT 1"
+            );
+            if ($stmt) {
+                $stmt->bind_param("i", $storeId);
+                $stmt->execute();
+                $storeRow = $stmt->get_result()->fetch_assoc();
+                $stmt->close();
+            }
+        }
+    }
+
+    if (!$storeRow || empty($storeRow['store_id'])) {
+        return null;
+    }
+
+    $logo = trim((string) ($storeRow['logo'] ?? ''));
+    $phone = trim((string) ($storeRow['phone'] ?? ''));
+
+    return [
+        'request_id' => $requestId,
+        'store_id' => (int) ($storeRow['store_id'] ?? 0),
+        'id' => (int) ($storeRow['store_id'] ?? 0),
+        'name_ar' => trim((string) ($storeRow['name_ar'] ?? '')),
+        'name_en' => trim((string) ($storeRow['name_en'] ?? '')),
+        'name_ur' => trim((string) ($storeRow['name_ur'] ?? '')),
+        'name' => trim((string) ($storeRow['name_ar'] ?? $storeRow['name_en'] ?? '')),
+        'contact_person' => trim((string) ($storeRow['contact_person'] ?? '')),
+        'phone' => $phone,
+        'whatsapp' => $phone,
+        'email' => trim((string) ($storeRow['email'] ?? '')),
+        'address' => trim((string) ($storeRow['address'] ?? '')),
+        'logo' => $logo !== '' ? imageUrl($logo) : null,
+        'notes' => trim((string) ($storeRow['notes'] ?? '')),
+        'is_active' => isset($storeRow['is_active']) ? ((int) $storeRow['is_active'] === 1) : null,
+    ];
+}
+
 /**
  * Set Initial Estimate (Ops/Admin)
  */
@@ -5007,7 +5313,57 @@ function formatOrder($row, array $context = [])
     $orderId = (int) ($row['id'] ?? 0);
     $categoryId = (int) ($row['category_id'] ?? 0);
     $categoryName = getOrderCategoryDisplayName($categoryId, $row['category_name'] ?? null);
+    $categoryImage = serviceCategoryImageForApi($row['category_image'] ?? null);
+    $categoryIcon = serviceCategoryPrimaryMediaForApi(
+        $row['category_icon'] ?? null,
+        $row['category_image'] ?? null,
+        $categoryName,
+        ''
+    );
     $problemDetailsArray = decodeOrderProblemDetailsPayload($row['problem_details'] ?? null);
+    $problemTypeLabels = normalizeProblemTypeLabelsFromDetails($problemDetailsArray);
+    $problemTypeIdLabels = fetchProblemTypeLabelsByIds(
+        normalizeProblemTypeIdsFromDetails($problemDetailsArray, $row['type_option_id'] ?? null)
+    );
+    foreach ($problemTypeIdLabels as $label) {
+        if ($label !== '' && !in_array($label, $problemTypeLabels, true)) {
+            $problemTypeLabels[] = $label;
+        }
+    }
+    if (empty($problemTypeLabels) && array_key_exists('type', $problemDetailsArray)) {
+        $problemTypeLabels = normalizeProblemTypeLabelsFromDetails([
+            'problem_type_labels' => [$problemDetailsArray['type']],
+        ]);
+    }
+    if (!empty($problemTypeLabels)) {
+        $problemDetailsArray['problem_type_labels'] = $problemTypeLabels;
+        $problemDetailsArray['problem_types'] = $problemTypeLabels;
+        $problemDetailsArray['types'] = $problemTypeLabels;
+        $problemDetailsArray['problem_type_titles'] = $problemTypeLabels;
+        $problemDetailsArray['selected_problem_types'] = $problemTypeLabels;
+    }
+
+    $containerStore = fetchOrderContainerStoreAssignment($orderId, $problemDetailsArray);
+    if ($containerStore !== null) {
+        $containerRequest = $problemDetailsArray['container_request'] ?? [];
+        if ($containerRequest instanceof stdClass) {
+            $containerRequest = (array) $containerRequest;
+        }
+        if (!is_array($containerRequest)) {
+            $containerRequest = [];
+        }
+
+        $containerRequest['container_store_id'] = $containerStore['store_id'];
+        $containerRequest['container_store_name'] = $containerStore['name'];
+        $containerRequest['container_store_phone'] = $containerStore['phone'];
+        $containerRequest['container_store_whatsapp'] = $containerStore['whatsapp'];
+        $containerRequest['container_store_email'] = $containerStore['email'];
+        $containerRequest['container_store_address'] = $containerStore['address'];
+        $containerRequest['container_store_logo'] = $containerStore['logo'];
+        $containerRequest['assigned_container_store'] = $containerStore;
+        $problemDetailsArray['container_request'] = $containerRequest;
+        $problemDetailsArray['container_store'] = $containerStore;
+    }
     $problemDetailsObject = !empty($problemDetailsArray) ? (object) $problemDetailsArray : null;
     $inspectionFee = isset($row['inspection_fee']) ? (float) $row['inspection_fee'] : 0.0;
     $invoiceItems = normalizeInvoiceItemsPayload($row['invoice_items'] ?? null);
@@ -5203,7 +5559,8 @@ function formatOrder($row, array $context = [])
         'scheduled_time' => $row['scheduled_time'] ?? null,
         'category_name' => $categoryName,
         'display_service_name' => $displayServiceName !== '' ? $displayServiceName : $categoryName,
-        'category_icon' => $row['category_icon'] ?? null,
+        'category_icon' => $categoryIcon,
+        'category_image' => $categoryImage,
         'provider_name' => $providerName,
         'provider_avatar' => $providerAvatar,
         'provider_rating' => $providerRating,
@@ -5213,10 +5570,14 @@ function formatOrder($row, array $context = [])
         'provider_status' => $providerStatus,
         'provider_is_available' => $providerIsAvailable,
         'selected_provider' => $selectedProvider,
+        'container_store' => $containerStore,
+        'container_store_id' => $containerStore['store_id'] ?? null,
+        'container_store_name' => $containerStore['name'] ?? null,
         'created_at' => $row['created_at'],
         'attachments' => normalizeMediaListPayload($row['attachments'] ?? null),
         'problem_images' => normalizeMediaListPayload($row['problem_images'] ?? null),
         'inspection_images' => normalizeMediaListPayload($row['inspection_images'] ?? null),
+        'problem_type_labels' => $problemTypeLabels,
         'problem_details' => $problemDetailsObject,
         'service_ids' => $serviceIds,
         'service_items' => $serviceItems,
@@ -5375,6 +5736,74 @@ function reviewColumnExists($column)
 }
 
 /**
+ * Normalize a string-list field from JSON body or multipart/form-data.
+ */
+function normalizeStringListPayload($payload)
+{
+    if ($payload === null) {
+        return [];
+    }
+
+    if (is_string($payload)) {
+        $trimmed = trim($payload);
+        if ($trimmed === '') {
+            return [];
+        }
+
+        $decoded = json_decode($trimmed, true);
+        if (json_last_error() === JSON_ERROR_NONE) {
+            $payload = $decoded;
+        } else {
+            $payload = preg_split('/\s*[,،]\s*/u', $trimmed) ?: [$trimmed];
+        }
+    }
+
+    if (is_object($payload)) {
+        $payload = (array) $payload;
+    }
+
+    if (!is_array($payload)) {
+        $payload = [$payload];
+    }
+
+    $normalized = [];
+    $appendItem = static function ($item) use (&$normalized, &$appendItem) {
+        if (is_object($item)) {
+            $item = (array) $item;
+        }
+        if (is_array($item)) {
+            $candidate = $item['title_ar']
+                ?? $item['name_ar']
+                ?? $item['title']
+                ?? $item['name']
+                ?? $item['type']
+                ?? $item['title_en']
+                ?? $item['name_en']
+                ?? $item['title_ur']
+                ?? $item['name_ur']
+                ?? '';
+            if (trim((string) $candidate) === '') {
+                foreach ($item as $nestedItem) {
+                    $appendItem($nestedItem);
+                }
+                return;
+            }
+            $item = $candidate;
+        }
+        $value = trim((string) $item);
+        if ($value !== '' && !in_array($value, $normalized, true)) {
+            $normalized[] = $value;
+        }
+    };
+
+    foreach ($payload as $item) {
+        $appendItem($item);
+    }
+
+    return $normalized;
+}
+
+/**
  * Normalize problem_details payload from JSON body or multipart/form-data.
  */
 function normalizeProblemDetailsPayload($payload)
@@ -5416,6 +5845,21 @@ function normalizeProblemDetailsPayload($payload)
                 $normalized[$key] = $value;
             }
         }
+    }
+
+    $problemTypes = array_values(array_unique(array_merge(
+        normalizeStringListPayload($payload['problem_type_labels'] ?? []),
+        normalizeStringListPayload($payload['problem_types'] ?? []),
+        normalizeStringListPayload($payload['types'] ?? []),
+        normalizeStringListPayload($payload['problem_type_titles'] ?? []),
+        normalizeStringListPayload($payload['selected_problem_types'] ?? [])
+    )));
+    if (!empty($problemTypes)) {
+        $normalized['problem_type_labels'] = $problemTypes;
+        $normalized['problem_types'] = $problemTypes;
+        $normalized['types'] = $problemTypes;
+        $normalized['problem_type_titles'] = $problemTypes;
+        $normalized['selected_problem_types'] = $problemTypes;
     }
 
     if (isset($payload['module'])) {
@@ -5503,6 +5947,15 @@ function normalizeProblemDetailsPayload($payload)
                 $normalized[$numericKey] = $value;
             }
         }
+    }
+
+    $problemTypeIds = array_values(array_unique(array_merge(
+        normalizeIntegerIds($payload['problem_type_ids'] ?? []),
+        normalizeIntegerIds($payload['type_option_ids'] ?? [])
+    )));
+    if (!empty($problemTypeIds)) {
+        $normalized['problem_type_ids'] = $problemTypeIds;
+        $normalized['type_option_ids'] = $problemTypeIds;
     }
 
     $pricingMode = normalizeSparePricingMode($payload['pricing_mode'] ?? null);
@@ -5595,6 +6048,20 @@ function normalizeContainerRequestPayload($payload)
             $normalized[$boolKey] = normalizeBooleanValue($payload[$boolKey]);
         }
     }
+
+    $dates = specialNormalizeContainerRentalDates(
+        $normalized['start_date'] ?? null,
+        $normalized['end_date'] ?? null,
+        $normalized['duration_days'] ?? 1
+    );
+    foreach (['start_date', 'end_date'] as $dateKey) {
+        if ($dates[$dateKey] !== null) {
+            $normalized[$dateKey] = $dates[$dateKey];
+        } else {
+            unset($normalized[$dateKey]);
+        }
+    }
+    $normalized['duration_days'] = $dates['duration_days'];
 
     return $normalized;
 }
@@ -6138,7 +6605,7 @@ function ensureOtherServiceCategory()
         $insertData['name_en'] = 'Other Service';
     }
     if (tableColumnExists('service_categories', 'icon')) {
-        $insertData['icon'] = '🔧';
+        $insertData['icon'] = null;
     }
     if (tableColumnExists('service_categories', 'is_active')) {
         $insertData['is_active'] = 1;
@@ -6366,6 +6833,7 @@ function fetchOrderAssignedProviders($orderId)
          LEFT JOIN providers p ON p.id = op.provider_id
          LEFT JOIN orders o ON o.id = op.order_id
          WHERE op.order_id = ?
+           AND op.assignment_status NOT IN ('cancelled', 'rejected')
          ORDER BY op.id ASC"
     );
     if (!$stmt) {
@@ -7078,6 +7546,12 @@ function syncSpecialServiceRequestFromOrder($orderId, $userId, array $problemDet
         }
 
         $durationDays = max(1, (int) ($containerRequest['duration_days'] ?? 1));
+        $containerDates = specialNormalizeContainerRentalDates(
+            $containerRequest['start_date'] ?? ($orderRow['scheduled_date'] ?? null),
+            $containerRequest['end_date'] ?? null,
+            $durationDays
+        );
+        $durationDays = (int) $containerDates['duration_days'];
         $quantity = max(1, (int) ($containerRequest['quantity'] ?? 1));
         $weightKg = specialToPositiveFloat($containerRequest['estimated_weight_kg'] ?? 0);
         $distanceMeters = specialToPositiveFloat($containerRequest['estimated_distance_meters'] ?? 0);
@@ -7150,8 +7624,8 @@ function syncSpecialServiceRequestFromOrder($orderId, $userId, array $problemDet
             'phone' => $customerPhone,
             'site_city' => trim((string) ($containerRequest['site_city'] ?? '')),
             'site_address' => trim((string) ($containerRequest['site_address'] ?? $address ?? '')),
-            'start_date' => specialNormalizeDateValue($containerRequest['start_date'] ?? ($orderRow['scheduled_date'] ?? null)),
-            'end_date' => specialNormalizeDateValue($containerRequest['end_date'] ?? null),
+            'start_date' => $containerDates['start_date'],
+            'end_date' => $containerDates['end_date'],
             'duration_days' => $durationDays,
             'quantity' => $quantity,
             'needs_loading_help' => !empty($containerRequest['needs_loading_help']) ? 1 : 0,
@@ -7506,7 +7980,7 @@ function inferBindTypeByColumn($column, $value)
 /**
  * Apply lifecycle defaults right after order creation.
  */
-function applyOrderLifecycleDefaults($orderId, $scheduledDate, $scheduledTime)
+function applyOrderLifecycleDefaults($orderId, $scheduledDate, $scheduledTime, $inspectionFee = 0.0)
 {
     global $conn;
 
@@ -7517,7 +7991,7 @@ function applyOrderLifecycleDefaults($orderId, $scheduledDate, $scheduledTime)
     if (orderColumnExists('inspection_fee')) {
         $updates[] = 'inspection_fee = ?';
         $types .= 'd';
-        $values[] = 0.0; // Free inspection by product policy
+        $values[] = inspectionPricingNormalizeFee($inspectionFee);
     }
 
     if (orderColumnExists('confirmation_status')) {

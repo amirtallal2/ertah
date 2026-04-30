@@ -533,7 +533,8 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     final weightKg = _toDouble(container['estimated_weight_kg']);
     final distanceMeters = _toDouble(container['estimated_distance_meters']);
     final minimumCharge = _toDouble(container['minimum_charge']);
-    double calculated = (pricePerKg * weightKg) + (pricePerMeter * distanceMeters);
+    double calculated =
+        (pricePerKg * weightKg) + (pricePerMeter * distanceMeters);
     if (calculated > 0) {
       if (minimumCharge > 0 && calculated < minimumCharge) {
         calculated = minimumCharge;
@@ -554,9 +555,7 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
   bool get _shouldTreatInvoiceAsPending {
     final normalized = _rawInvoiceStatus;
-    if (normalized.isNotEmpty &&
-        normalized != 'none' &&
-        normalized != 'null') {
+    if (normalized.isNotEmpty && normalized != 'none' && normalized != 'null') {
       return false;
     }
     if (!(_isSparePartsWithInstallation || _isContainerOrder)) {
@@ -566,8 +565,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   }
 
   String _normalizeInvoiceStatus(String rawStatus) {
-    final normalized =
-        rawStatus.isEmpty || rawStatus == 'null' ? 'none' : rawStatus;
+    final normalized = rawStatus.isEmpty || rawStatus == 'null'
+        ? 'none'
+        : rawStatus;
     if (normalized == 'none' && _shouldTreatInvoiceAsPending) {
       return 'pending';
     }
@@ -583,11 +583,13 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     if (derivedTotal > 0) return derivedTotal;
     return 0;
   }
+
   double get _payableAmount {
     if (_totalAmount > 0) return _totalAmount;
     final fallback = _laborCost + _partsCost;
     return fallback > 0 ? fallback : 0;
   }
+
   double get _inspectionFee => _toDouble(_order?['inspection_fee']);
   double? get _minEstimate => _toNullableDouble(_order?['min_estimate']);
   double? get _maxEstimate => _toNullableDouble(_order?['max_estimate']);
@@ -615,24 +617,51 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     return {};
   }
 
+  String _inspectionPolicyDetails() {
+    final rawPolicy = _problemDetails['inspection_policy'];
+    if (rawPolicy is! Map) return '';
+    final policy = Map<String, dynamic>.from(rawPolicy);
+    final localeCode = Localizations.localeOf(context).languageCode;
+    if (localeCode == 'en') {
+      return _firstNonEmpty([
+        (policy['details_en'] ?? '').toString(),
+        (policy['details_ar'] ?? '').toString(),
+        (policy['details_ur'] ?? '').toString(),
+      ]);
+    }
+    if (localeCode == 'ur') {
+      return _firstNonEmpty([
+        (policy['details_ur'] ?? '').toString(),
+        (policy['details_en'] ?? '').toString(),
+        (policy['details_ar'] ?? '').toString(),
+      ]);
+    }
+    return _firstNonEmpty([
+      (policy['details_ar'] ?? '').toString(),
+      (policy['details_en'] ?? '').toString(),
+      (policy['details_ur'] ?? '').toString(),
+    ]);
+  }
+
   bool get _isSparePartsWithInstallation {
     final details = _problemDetails;
     if (details.isEmpty) return false;
 
-    final rawToken = (details['type'] ??
-            details['module'] ??
-            details['special_module'] ??
-            '')
-        .toString();
-    final token = _normalize(rawToken)
-        .replaceAll('-', '_')
-        .replaceAll(' ', '_');
+    final rawToken =
+        (details['type'] ??
+                details['module'] ??
+                details['special_module'] ??
+                '')
+            .toString();
+    final token = _normalize(
+      rawToken,
+    ).replaceAll('-', '_').replaceAll(' ', '_');
     if (token == 'spare_parts_with_installation') {
       return true;
     }
-    final pricingMode = _normalize(details['pricing_mode'])
-        .replaceAll('-', '_')
-        .replaceAll(' ', '_');
+    final pricingMode = _normalize(
+      details['pricing_mode'],
+    ).replaceAll('-', '_').replaceAll(' ', '_');
     if (pricingMode == 'with_installation' && token.contains('spare_parts')) {
       return true;
     }
@@ -655,20 +684,96 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
     if (details.isEmpty) return false;
     if (details['container_request'] != null) return true;
 
-    final rawToken = (details['type'] ??
-            details['module'] ??
-            details['special_module'] ??
-            '')
-        .toString();
+    final rawToken =
+        (details['type'] ??
+                details['module'] ??
+                details['special_module'] ??
+                '')
+            .toString();
     final token = _normalize(rawToken);
     return token == 'container_rental' || token.contains('container');
+  }
+
+  Map<String, dynamic> get _containerStoreInfo {
+    Map<String, dynamic> normalizeMap(dynamic raw) {
+      if (raw is! Map) return <String, dynamic>{};
+      return Map<String, dynamic>.from(
+        raw.map((key, value) => MapEntry(key.toString(), value)),
+      );
+    }
+
+    final topLevel = normalizeMap(_order?['container_store']);
+    if (topLevel.isNotEmpty) return topLevel;
+
+    final details = _problemDetails;
+    final detailsStore = normalizeMap(details['container_store']);
+    if (detailsStore.isNotEmpty) return detailsStore;
+
+    final container = normalizeMap(details['container_request']);
+    final assignedStore = normalizeMap(container['assigned_container_store']);
+    if (assignedStore.isNotEmpty) return assignedStore;
+
+    final nestedStore = normalizeMap(container['container_store']);
+    if (nestedStore.isNotEmpty) return nestedStore;
+
+    final storeId =
+        int.tryParse(
+          '${container['container_store_id'] ?? details['container_store_id'] ?? 0}',
+        ) ??
+        0;
+    final storeName = _firstNonEmpty([
+      (container['container_store_name'] ?? '').toString(),
+      (details['container_store_name'] ?? '').toString(),
+    ]);
+    if (storeId <= 0 && storeName.isEmpty) {
+      return <String, dynamic>{};
+    }
+
+    return {
+      'store_id': storeId,
+      'id': storeId,
+      'name': storeName,
+      'name_ar': storeName,
+      'phone': (container['container_store_phone'] ?? '').toString(),
+      'whatsapp': (container['container_store_whatsapp'] ?? '').toString(),
+      'email': (container['container_store_email'] ?? '').toString(),
+      'address': (container['container_store_address'] ?? '').toString(),
+      'logo': (container['container_store_logo'] ?? '').toString(),
+    };
+  }
+
+  String _containerStoreName(Map<String, dynamic> store) {
+    final localeCode = Localizations.localeOf(context).languageCode;
+    if (localeCode == 'en') {
+      return _firstNonEmpty([
+        (store['name_en'] ?? '').toString(),
+        (store['name'] ?? '').toString(),
+        (store['name_ar'] ?? '').toString(),
+        (store['name_ur'] ?? '').toString(),
+      ]);
+    }
+    if (localeCode == 'ur') {
+      return _firstNonEmpty([
+        (store['name_ur'] ?? '').toString(),
+        (store['name_en'] ?? '').toString(),
+        (store['name'] ?? '').toString(),
+        (store['name_ar'] ?? '').toString(),
+      ]);
+    }
+    return _firstNonEmpty([
+      (store['name_ar'] ?? '').toString(),
+      (store['name'] ?? '').toString(),
+      (store['name_en'] ?? '').toString(),
+      (store['name_ur'] ?? '').toString(),
+    ]);
   }
 
   bool get _canPayNow {
     if (_paymentStatus == 'paid' || _payableAmount <= 0) {
       return false;
     }
-    final allowPendingInvoice = _isSparePartsWithInstallation || _isContainerOrder;
+    final allowPendingInvoice =
+        _isSparePartsWithInstallation || _isContainerOrder;
     return _invoiceStatus == 'approved' ||
         (allowPendingInvoice && _invoiceStatus == 'pending');
   }
@@ -926,9 +1031,86 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   }
 
   String _problemTypeLabel() {
-    final details = _order?['problem_details'];
-    if (details is! Map) {
+    final details = _problemDetails;
+    if (details.isEmpty) {
       return '';
+    }
+
+    final problemTypes = <String>[];
+    void addProblemTypes(dynamic value) {
+      if (value == null) return;
+      if (value is String) {
+        final trimmed = value.trim();
+        if (trimmed.isEmpty) return;
+        try {
+          final decoded = jsonDecode(trimmed);
+          addProblemTypes(decoded);
+          return;
+        } catch (_) {
+          final parts = trimmed.split(RegExp(r'\s*[,،]\s*'));
+          if (parts.length > 1) {
+            for (final part in parts) {
+              addProblemTypes(part);
+            }
+            return;
+          }
+          final label = _localizedProblemTypeToken(trimmed);
+          final resolved = label.isNotEmpty
+              ? label
+              : (trimmed.contains('_') ? _humanizeToken(trimmed) : trimmed);
+          if (resolved.isNotEmpty && !problemTypes.contains(resolved)) {
+            problemTypes.add(resolved);
+          }
+          return;
+        }
+      }
+      if (value is List) {
+        for (final item in value) {
+          addProblemTypes(item);
+        }
+        return;
+      }
+      if (value is Map) {
+        final localeCode = Localizations.localeOf(context).languageCode;
+        final label = localeCode == 'en'
+            ? _firstNonEmpty([
+                (value['title_en'] ?? value['name_en'] ?? '').toString(),
+                (value['title'] ?? value['name'] ?? value['type'] ?? '')
+                    .toString(),
+                (value['title_ar'] ?? value['name_ar'] ?? '').toString(),
+              ])
+            : localeCode == 'ur'
+            ? _firstNonEmpty([
+                (value['title_ur'] ?? value['name_ur'] ?? '').toString(),
+                (value['title_en'] ?? value['name_en'] ?? '').toString(),
+                (value['title'] ?? value['name'] ?? value['type'] ?? '')
+                    .toString(),
+                (value['title_ar'] ?? value['name_ar'] ?? '').toString(),
+              ])
+            : _firstNonEmpty([
+                (value['title_ar'] ?? value['name_ar'] ?? '').toString(),
+                (value['title'] ?? value['name'] ?? value['type'] ?? '')
+                    .toString(),
+                (value['title_en'] ?? value['name_en'] ?? '').toString(),
+              ]);
+        if (label.trim().isNotEmpty) {
+          addProblemTypes(label);
+          return;
+        }
+        for (final item in value.values) {
+          addProblemTypes(item);
+        }
+      }
+    }
+
+    addProblemTypes(_order?['problem_type_labels']);
+    addProblemTypes(details['problem_type_labels']);
+    addProblemTypes(details['problem_types']);
+    addProblemTypes(details['types']);
+    addProblemTypes(details['problem_type_titles']);
+    addProblemTypes(details['selected_problem_types']);
+    if (problemTypes.isNotEmpty) {
+      return problemTypes.join('، ');
     }
 
     final directMapped = _localizedProblemTypeToken(
@@ -1490,6 +1672,11 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
               ? context.tr('order_tracking_free_inspection')
               : '${_inspectionFee.toStringAsFixed(2)} ${context.tr('sar')}',
         ),
+        if (_inspectionPolicyDetails().isNotEmpty)
+          _infoRow(
+            context.tr('order_tracking_inspection_details'),
+            _inspectionPolicyDetails(),
+          ),
         _infoRow(
           context.tr('order_tracking_operations_notes'),
           _operationsNotesText(),
@@ -1825,6 +2012,141 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
             if (quickActions.isEmpty) {
               return const SizedBox.shrink();
             }
+
+            final columns = constraints.maxWidth >= 540
+                ? 3
+                : (constraints.maxWidth >= 320 ? 2 : 1);
+            final horizontalGap = 8.0;
+            final itemWidth =
+                (constraints.maxWidth - ((columns - 1) * horizontalGap)) /
+                columns;
+
+            return Wrap(
+              spacing: horizontalGap,
+              runSpacing: 8,
+              children: quickActions
+                  .map((action) => SizedBox(width: itemWidth, child: action))
+                  .toList(),
+            );
+          },
+        ),
+      ],
+    );
+  }
+
+  Widget _buildContainerStoreCard() {
+    final store = _containerStoreInfo;
+    final storeName = _containerStoreName(store);
+
+    if (storeName.isEmpty) {
+      return _sectionCard(
+        title: context.tr('order_tracking_container_store'),
+        icon: Icons.storefront_rounded,
+        iconColor: AppColors.primaryDark,
+        children: [
+          Text(
+            context.tr('order_tracking_assigning_container_store'),
+            style: const TextStyle(color: AppColors.gray600),
+          ),
+        ],
+      );
+    }
+
+    final phone = (store['phone'] ?? '').toString().trim();
+    final whatsapp = (store['whatsapp'] ?? phone).toString().trim();
+    final email = (store['email'] ?? '').toString().trim();
+    final address = (store['address'] ?? '').toString().trim();
+    final logo = (store['logo'] ?? '').toString().trim();
+    final contactPerson = (store['contact_person'] ?? '').toString().trim();
+
+    return _sectionCard(
+      title: context.tr('order_tracking_container_store'),
+      icon: Icons.storefront_rounded,
+      iconColor: AppColors.primaryDark,
+      children: [
+        Row(
+          children: [
+            Container(
+              width: 52,
+              height: 52,
+              decoration: BoxDecoration(
+                color: AppColors.primary.withValues(alpha: 0.14),
+                borderRadius: BorderRadius.circular(16),
+              ),
+              clipBehavior: Clip.antiAlias,
+              child: logo.isNotEmpty
+                  ? CachedNetworkImage(
+                      imageUrl: logo,
+                      fit: BoxFit.cover,
+                      errorWidget: (_, __, ___) => const Icon(
+                        Icons.storefront_rounded,
+                        color: AppColors.primaryDark,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.storefront_rounded,
+                      color: AppColors.primaryDark,
+                    ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    storeName,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.gray900,
+                    ),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    context.tr('order_tracking_container_store_assigned'),
+                    style: const TextStyle(
+                      fontSize: 12,
+                      color: AppColors.gray600,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        if (contactPerson.isNotEmpty)
+          _infoRow(context.tr('order_tracking_contact_person'), contactPerson),
+        _infoRow(context.tr('phone'), phone.isEmpty ? '-' : phone),
+        if (email.isNotEmpty) _infoRow(context.tr('email'), email),
+        _infoRow(
+          context.tr('address'),
+          address.isEmpty ? context.tr('address_not_specified') : address,
+        ),
+        const SizedBox(height: 8),
+        LayoutBuilder(
+          builder: (context, constraints) {
+            final quickActions = <Widget>[
+              _buildContactActionTile(
+                icon: Icons.phone_in_talk_rounded,
+                label: context.tr('order_tracking_call_container_store'),
+                color: Colors.blue,
+                onTap: phone.isEmpty ? null : () => _callNumber(phone),
+              ),
+              if (whatsapp.isNotEmpty)
+                _buildContactActionTile(
+                  icon: Icons.mark_chat_unread_rounded,
+                  label: context.tr('order_tracking_whatsapp_container_store'),
+                  color: const Color(0xFF16A34A),
+                  onTap: () => _openWhatsApp(whatsapp),
+                ),
+              _buildContactActionTile(
+                icon: Icons.support_agent_rounded,
+                label: context.tr('order_tracking_call_operations'),
+                color: Colors.indigo,
+                onTap: () => _callNumber(AppConfig.supportPhone),
+              ),
+            ];
 
             final columns = constraints.maxWidth >= 540
                 ? 3
@@ -2383,7 +2705,9 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
               const SizedBox(height: 12),
               _buildConfirmationCard(),
               const SizedBox(height: 12),
-              _buildProviderCard(),
+              _isContainerOrder
+                  ? _buildContainerStoreCard()
+                  : _buildProviderCard(),
               const SizedBox(height: 12),
               _buildInvoiceCard(),
               const SizedBox(height: 12),

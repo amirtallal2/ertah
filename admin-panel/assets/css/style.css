@@ -90,6 +90,19 @@ img {
     height: auto;
 }
 
+/* Keep Leaflet tiles and overlays at their intrinsic size. */
+.leaflet-container {
+    direction: ltr;
+    background: #e5e7eb;
+}
+
+.leaflet-container img,
+.leaflet-container svg,
+.leaflet-container canvas {
+    max-width: none !important;
+    max-height: none !important;
+}
+
 /* =====================================================
    صفحة تسجيل الدخول
    ===================================================== */

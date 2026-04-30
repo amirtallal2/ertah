@@ -20,6 +20,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
 }
 
 require_once __DIR__ . '/../config/database.php';
+require_once __DIR__ . '/../../includes/database.php';
+require_once __DIR__ . '/../../includes/provider_finance.php';
 require_once __DIR__ . '/../helpers/response.php';
 require_once __DIR__ . '/../helpers/jwt.php';
 
@@ -492,6 +494,13 @@ function formatProviderForAuth($provider)
     $providerId = (int) ($provider['id'] ?? 0);
     $categoryIds = getProviderCategoryIdsForAuth($providerId);
     $profileCompleted = computeProviderProfileCompletion($provider, $categoryIds);
+    $financeSummary = [];
+    try {
+        providerFinanceSyncProviderOrderStats($providerId);
+        $financeSummary = providerFinanceSyncProviderWalletBalance($providerId);
+    } catch (Throwable $e) {
+        $financeSummary = providerFinanceGetSummary($providerId);
+    }
 
     return [
         'id' => $providerId,
@@ -514,7 +523,8 @@ function formatProviderForAuth($provider)
         'is_available' => isset($provider['is_available']) ? ((int) $provider['is_available'] === 1) : false,
         'category_ids' => $categoryIds,
         'categories_locked' => isset($provider['categories_locked']) ? ((int) ($provider['categories_locked']) === 1) : !empty($categoryIds),
-        'wallet_balance' => isset($provider['wallet_balance']) ? (float) $provider['wallet_balance'] : 0.0,
+        'wallet_balance' => (float) ($financeSummary['available_balance'] ?? ($provider['wallet_balance'] ?? 0)),
+        'financial_summary' => $financeSummary,
         'points' => 0,
         'membership_level' => 'provider',
         'referral_code' => null,

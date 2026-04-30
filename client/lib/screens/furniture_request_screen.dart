@@ -3,9 +3,11 @@ import 'package:intl/intl.dart';
 
 import '../config/app_theme.dart';
 import '../models/service_category_model.dart';
+import '../services/app_localizations.dart';
 import '../services/furniture_requests_service.dart';
 import '../widgets/guest_guard.dart';
-import '../services/app_localizations.dart';
+import 'location_picker_screen.dart';
+import 'static_content_page_screen.dart';
 
 class FurnitureRequestScreen extends StatefulWidget {
   final ServiceCategoryModel service;
@@ -26,12 +28,6 @@ class FurnitureRequestScreen extends StatefulWidget {
 class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
   final FurnitureRequestsService _service = FurnitureRequestsService();
 
-  final TextEditingController _pickupAddressController =
-      TextEditingController();
-  final TextEditingController _dropoffAddressController =
-      TextEditingController();
-  final TextEditingController _pickupCityController = TextEditingController();
-  final TextEditingController _dropoffCityController = TextEditingController();
   final TextEditingController _estimatedWeightController =
       TextEditingController();
   final TextEditingController _estimatedDistanceController =
@@ -45,11 +41,13 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
   bool _isSubmitting = false;
   bool _agreedToTerms = false;
 
-  List<Map<String, dynamic>> _areas = [];
   List<Map<String, dynamic>> _fields = [];
   List<Map<String, dynamic>> _services = [];
+  List<int> _selectedServiceIds = [];
 
-  int? _selectedAreaId;
+  Map<String, dynamic>? _pickupAddressData;
+  Map<String, dynamic>? _dropoffAddressData;
+
   int? _selectedServiceId;
   DateTime? _selectedDate;
   TimeOfDay? _selectedTime;
@@ -57,15 +55,28 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
   @override
   void initState() {
     super.initState();
+    _selectedServiceIds = _normalizeServiceIds([
+      ...widget.selectedServiceIds,
+      ...widget.selectedServices.map((item) => item['id']),
+    ]);
+    if (_selectedServiceIds.isNotEmpty) {
+      _selectedServiceId = _selectedServiceIds.first;
+    }
     _loadConfig();
+  }
+
+  void _openTermsPage() {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (_) =>
+            const StaticContentPageScreen(page: StaticContentPageKey.terms),
+      ),
+    );
   }
 
   @override
   void dispose() {
-    _pickupAddressController.dispose();
-    _dropoffAddressController.dispose();
-    _pickupCityController.dispose();
-    _dropoffCityController.dispose();
     _estimatedWeightController.dispose();
     _estimatedDistanceController.dispose();
     _notesController.dispose();
@@ -90,12 +101,57 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
     return value?.toString() ?? '';
   }
 
+  List<int> _normalizeServiceIds(Iterable<dynamic> values) {
+    final ids = <int>[];
+    for (final value in values) {
+      final id = _toInt(value);
+      if (id != null && id > 0 && !ids.contains(id)) {
+        ids.add(id);
+      }
+    }
+    return ids;
+  }
+
+  Map<String, dynamic> _serviceById(int? serviceId) {
+    if (serviceId == null || serviceId <= 0) {
+      return <String, dynamic>{};
+    }
+
+    for (final item in _services) {
+      if (_toInt(item['id']) == serviceId) {
+        return item;
+      }
+    }
+
+    for (final item in widget.selectedServices) {
+      if (_toInt(item['id']) == serviceId) {
+        return Map<String, dynamic>.from(item);
+      }
+    }
+
+    return <String, dynamic>{};
+  }
+
+  List<Map<String, dynamic>> get _selectedServiceRows {
+    final rows = <Map<String, dynamic>>[];
+    for (final serviceId in _selectedServiceIds) {
+      final row = _serviceById(serviceId);
+      if (row.isNotEmpty) {
+        rows.add(row);
+      }
+    }
+    return rows;
+  }
+
+  int? get _primarySelectedServiceId {
+    if (_selectedServiceIds.isNotEmpty) {
+      return _selectedServiceIds.first;
+    }
+    return _selectedServiceId;
+  }
+
   Map<String, dynamic> get _selectedServiceRow {
-    if (_selectedServiceId == null) return <String, dynamic>{};
-    return _services.firstWhere(
-      (item) => _toInt(item['id']) == _selectedServiceId,
-      orElse: () => <String, dynamic>{},
-    );
+    return _serviceById(_primarySelectedServiceId);
   }
 
   double get _estimatedWeightKg =>
@@ -105,20 +161,16 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
       double.tryParse(_estimatedDistanceController.text.trim()) ?? 0;
 
   double get _calculatedEstimate {
-    final service = _selectedServiceRow;
-    if (service.isEmpty) return 0;
+    final selectedRows = _selectedServiceRows;
+    if (selectedRows.isEmpty) {
+      final fallback = _selectedServiceRow;
+      if (fallback.isEmpty) return 0;
+      return _calculateServiceEstimate(fallback);
+    }
 
-    final basePrice = _toDouble(service['base_price']);
-    final perKg = _toDouble(service['price_per_kg']);
-    final perMeter = _toDouble(service['price_per_meter']);
-    final minimumCharge = _toDouble(service['minimum_charge']);
-
-    var total =
-        basePrice +
-        (perKg * _estimatedWeightKg) +
-        (perMeter * _estimatedDistanceMeters);
-    if (minimumCharge > 0) {
-      total = total < minimumCharge ? minimumCharge : total;
+    var total = 0.0;
+    for (final service in selectedRows) {
+      total += _calculateServiceEstimate(service);
     }
     return total;
   }
@@ -131,6 +183,62 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
       return ar.isNotEmpty ? ar : en;
     }
     return en.isNotEmpty ? en : ar;
+  }
+
+  String _serviceName(Map<String, dynamic> item) {
+    return _localized(item, 'name_ar', 'name_en');
+  }
+
+  double _calculateServiceEstimate(Map<String, dynamic> service) {
+    final basePrice = _toDouble(service['base_price']);
+    final perKg = _toDouble(service['price_per_kg']);
+    final perMeter = _toDouble(service['price_per_meter']);
+    final minimumCharge = _toDouble(service['minimum_charge']);
+
+    var total =
+        basePrice +
+        (perKg * _estimatedWeightKg) +
+        (perMeter * _estimatedDistanceMeters);
+    if (minimumCharge > 0 && total < minimumCharge) {
+      total = minimumCharge;
+    }
+    return total;
+  }
+
+  String _addressText(Map<String, dynamic>? data) {
+    if (data == null) return '';
+    return (data['address'] ?? '').toString().trim();
+  }
+
+  String _addressCity(Map<String, dynamic>? data) {
+    if (data == null) return '';
+    return (data['city_name'] ?? data['city'] ?? '').toString().trim();
+  }
+
+  Future<void> _pickAddress({required bool isPickup}) async {
+    final result = await Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => const LocationPickerScreen(
+          returnDataOnly: true,
+          persistSelection: false,
+        ),
+      ),
+    );
+
+    if (result is! Map) return;
+
+    final mapped = Map<String, dynamic>.from(
+      result.map((key, value) => MapEntry(key.toString(), value)),
+    );
+
+    setState(() {
+      if (isPickup) {
+        _pickupAddressData = mapped;
+      } else {
+        _dropoffAddressData = mapped;
+      }
+    });
   }
 
   Future<void> _loadConfig() async {
@@ -146,19 +254,11 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
 
       final data = Map<String, dynamic>.from(response.data as Map);
 
-      final areasRaw = (data['areas'] as List? ?? []);
       final fieldsRaw = (data['fields'] as List? ?? []);
       final servicesRaw = (data['services'] as List? ?? []);
 
-      final areas = <Map<String, dynamic>>[];
       final fields = <Map<String, dynamic>>[];
       final services = <Map<String, dynamic>>[];
-
-      for (final item in areasRaw) {
-        if (item is Map) {
-          areas.add(Map<String, dynamic>.from(item));
-        }
-      }
 
       for (final item in fieldsRaw) {
         if (item is Map) {
@@ -172,14 +272,13 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
         }
       }
 
-      final selectedFromPrevious = widget.selectedServiceIds.isNotEmpty
-          ? widget.selectedServiceIds.first
-          : null;
+      final matchedSelectedIds = _selectedServiceIds
+          .where((id) => services.any((service) => _toInt(service['id']) == id))
+          .toList();
 
       int? selectedServiceId;
-      if (selectedFromPrevious != null &&
-          services.any((s) => _toInt(s['id']) == selectedFromPrevious)) {
-        selectedServiceId = selectedFromPrevious;
+      if (matchedSelectedIds.isNotEmpty) {
+        selectedServiceId = matchedSelectedIds.first;
       } else if (services.length == 1) {
         selectedServiceId = _toInt(services.first['id']);
       }
@@ -199,9 +298,11 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
       }
 
       setState(() {
-        _areas = areas;
         _fields = fields;
         _services = services;
+        _selectedServiceIds = matchedSelectedIds.isNotEmpty
+            ? matchedSelectedIds
+            : (selectedServiceId != null ? [selectedServiceId] : <int>[]);
         _selectedServiceId = selectedServiceId;
         _isLoading = false;
       });
@@ -249,22 +350,15 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
   }
 
   bool _validateFields() {
-    if (_selectedAreaId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(context.tr('furniture_area_required'))),
-      );
-      return false;
-    }
-
-    if (_services.isNotEmpty && _selectedServiceId == null) {
+    if (_services.isNotEmpty && _selectedServiceIds.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(context.tr('furniture_service_type_required'))),
       );
       return false;
     }
 
-    if (_pickupAddressController.text.trim().isEmpty ||
-        _dropoffAddressController.text.trim().isEmpty) {
+    if (_addressText(_pickupAddressData).isEmpty ||
+        _addressText(_dropoffAddressData).isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(context.tr('furniture_addresses_required'))),
       );
@@ -349,34 +443,24 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
           ? '${_selectedTime!.hour.toString().padLeft(2, '0')}:${_selectedTime!.minute.toString().padLeft(2, '0')}'
           : null;
 
-      final selectedService = _services.firstWhere(
-        (item) => _toInt(item['id']) == _selectedServiceId,
-        orElse: () => <String, dynamic>{},
-      );
-
-      final selectedServicesPayload = selectedService.isEmpty
-          ? <Map<String, dynamic>>[]
-          : [
-              {
-                'id': _toInt(selectedService['id']),
-                'name_ar': _toStr(selectedService['name_ar']),
-                'name_en': _toStr(selectedService['name_en']),
-                'base_price': _toDouble(selectedService['base_price']),
-                'price_per_kg': _toDouble(selectedService['price_per_kg']),
-                'price_per_meter': _toDouble(
-                  selectedService['price_per_meter'],
-                ),
-                'minimum_charge': _toDouble(selectedService['minimum_charge']),
-              },
-            ];
+      final selectedServicesPayload = _selectedServiceRows.map((selected) {
+        return {
+          'id': _toInt(selected['id']),
+          'name_ar': _toStr(selected['name_ar']),
+          'name_en': _toStr(selected['name_en']),
+          'base_price': _toDouble(selected['base_price']),
+          'price_per_kg': _toDouble(selected['price_per_kg']),
+          'price_per_meter': _toDouble(selected['price_per_meter']),
+          'minimum_charge': _toDouble(selected['minimum_charge']),
+        };
+      }).toList();
 
       final response = await _service.createRequest(
-        serviceId: _selectedServiceId,
-        areaId: _selectedAreaId!,
-        pickupAddress: _pickupAddressController.text.trim(),
-        dropoffAddress: _dropoffAddressController.text.trim(),
-        pickupCity: _pickupCityController.text.trim(),
-        dropoffCity: _dropoffCityController.text.trim(),
+        serviceId: _primarySelectedServiceId,
+        pickupAddress: _addressText(_pickupAddressData),
+        dropoffAddress: _addressText(_dropoffAddressData),
+        pickupCity: _addressCity(_pickupAddressData),
+        dropoffCity: _addressCity(_dropoffAddressData),
         moveDate: moveDate,
         preferredTime: preferredTime,
         notes: _notesController.text.trim(),
@@ -385,8 +469,10 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
         estimatedDistanceMeters: _estimatedDistanceMeters > 0
             ? _estimatedDistanceMeters
             : null,
-        serviceIds: _selectedServiceId != null ? [_selectedServiceId!] : null,
-        selectedServices: selectedServicesPayload,
+        serviceIds: _selectedServiceIds.isNotEmpty ? _selectedServiceIds : null,
+        selectedServices: selectedServicesPayload.isNotEmpty
+            ? selectedServicesPayload
+            : null,
       );
 
       if (!mounted) return;
@@ -409,7 +495,7 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
           ),
         );
       }
-    } catch (e) {
+    } catch (_) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -473,7 +559,7 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
           boxShadow: AppShadows.sm,
         ),
         child: DropdownButtonFormField<String>(
-          value: (_fieldValues[key] as String?)?.isNotEmpty == true
+          initialValue: (_fieldValues[key] as String?)?.isNotEmpty == true
               ? _fieldValues[key] as String
               : null,
           decoration: InputDecoration(
@@ -525,8 +611,99 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
     );
   }
 
+  Widget _buildAddressTile({
+    required String title,
+    required Map<String, dynamic>? addressData,
+    required VoidCallback onTap,
+  }) {
+    final address = _addressText(addressData);
+    final city = _addressCity(addressData);
+
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: const Icon(Icons.location_on_outlined),
+      title: Text(
+        address.isNotEmpty ? address : title,
+        style: const TextStyle(fontWeight: FontWeight.w600),
+      ),
+      subtitle: Text(
+        city.isNotEmpty
+            ? city
+            : context.tr('service_request_add_new_address_from_map'),
+      ),
+      trailing: const Icon(Icons.edit_location_alt_outlined),
+      onTap: onTap,
+    );
+  }
+
+  Widget _buildSelectedServicesCard() {
+    final selectedRows = _selectedServiceRows;
+    if (selectedRows.isEmpty && _services.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: AppShadows.sm,
+      ),
+      child: selectedRows.isNotEmpty
+          ? Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  context.tr('service_request_selected_services'),
+                  style: const TextStyle(fontWeight: FontWeight.bold),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: selectedRows.map((service) {
+                    return Chip(
+                      label: Text(
+                        _serviceName(service),
+                        style: const TextStyle(color: Colors.black),
+                      ),
+                      backgroundColor: AppColors.primary.withValues(
+                        alpha: 0.12,
+                      ),
+                      side: BorderSide.none,
+                    );
+                  }).toList(),
+                ),
+              ],
+            )
+          : DropdownButtonFormField<int>(
+              initialValue: _selectedServiceId,
+              decoration: InputDecoration(
+                border: InputBorder.none,
+                labelText: context.tr('service_type_required_label'),
+              ),
+              items: _services
+                  .map(
+                    (service) => DropdownMenuItem<int>(
+                      value: _toInt(service['id']),
+                      child: Text(_serviceName(service)),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (value) {
+                setState(() {
+                  _selectedServiceId = value;
+                  _selectedServiceIds = value != null ? [value] : <int>[];
+                });
+              },
+            ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final selectedRows = _selectedServiceRows;
+
     return Scaffold(
       backgroundColor: const Color(0xFFF8F9FA),
       appBar: AppBar(
@@ -557,124 +734,7 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  Container(
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.white,
-                      borderRadius: BorderRadius.circular(12),
-                      boxShadow: AppShadows.sm,
-                    ),
-                    child: DropdownButtonFormField<int>(
-                      value: _selectedAreaId,
-                      decoration: InputDecoration(
-                        border: InputBorder.none,
-                        labelText: context.tr('area_required_label'),
-                      ),
-                      items: _areas
-                          .map(
-                            (area) => DropdownMenuItem<int>(
-                              value: _toInt(area['id']),
-                              child: Text(
-                                _localized(area, 'name_ar', 'name_en'),
-                              ),
-                            ),
-                          )
-                          .toList(),
-                      onChanged: (value) =>
-                          setState(() => _selectedAreaId = value),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  if (_services.isNotEmpty)
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: AppShadows.sm,
-                      ),
-                      child: DropdownButtonFormField<int>(
-                        value: _selectedServiceId,
-                        decoration: InputDecoration(
-                          border: InputBorder.none,
-                          labelText: context.tr('service_type_required_label'),
-                        ),
-                        items: _services
-                            .map(
-                              (service) => DropdownMenuItem<int>(
-                                value: _toInt(service['id']),
-                                child: Text(
-                                  _localized(service, 'name_ar', 'name_en'),
-                                ),
-                              ),
-                            )
-                            .toList(),
-                        onChanged: (value) =>
-                            setState(() => _selectedServiceId = value),
-                      ),
-                    ),
-                  if (_services.isNotEmpty) ...[
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.all(12),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                        boxShadow: AppShadows.sm,
-                      ),
-                      child: Column(
-                        children: [
-                          TextField(
-                            controller: _estimatedWeightController,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            decoration: InputDecoration(
-                              border: InputBorder.none,
-                              labelText: context.tr('estimated_weight_kg'),
-                              hintText: context.tr('optional'),
-                            ),
-                            onChanged: (_) => setState(() {}),
-                          ),
-                          const Divider(height: 1),
-                          TextField(
-                            controller: _estimatedDistanceController,
-                            keyboardType: const TextInputType.numberWithOptions(
-                              decimal: true,
-                            ),
-                            decoration: InputDecoration(
-                              border: InputBorder.none,
-                              labelText: context.tr('estimated_distance_meter'),
-                              hintText: context.tr('optional'),
-                            ),
-                            onChanged: (_) => setState(() {}),
-                          ),
-                          if (_selectedServiceRow.isNotEmpty) ...[
-                            const Divider(height: 16),
-                            Align(
-                              alignment: Alignment.centerRight,
-                              child: Text(
-                                context
-                                    .tr('initial_estimate_with_value')
-                                    .replaceAll(
-                                      '{value}',
-                                      _calculatedEstimate.toStringAsFixed(2),
-                                    )
-                                    .replaceAll(
-                                      '{currency}',
-                                      context.tr('sar'),
-                                    ),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.gray800,
-                                ),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
-                    ),
-                  ],
+                  _buildSelectedServicesCard(),
                   const SizedBox(height: 12),
                   Container(
                     padding: const EdgeInsets.all(12),
@@ -686,35 +746,73 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
                     child: Column(
                       children: [
                         TextField(
-                          controller: _pickupCityController,
-                          decoration: InputDecoration(
-                            labelText: context.tr('pickup_city'),
-                            border: InputBorder.none,
+                          controller: _estimatedWeightController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
                           ),
+                          decoration: InputDecoration(
+                            border: InputBorder.none,
+                            labelText: context.tr('estimated_weight_kg'),
+                            hintText: context.tr('optional'),
+                          ),
+                          onChanged: (_) => setState(() {}),
                         ),
                         const Divider(height: 1),
                         TextField(
-                          controller: _pickupAddressController,
-                          decoration: InputDecoration(
-                            labelText: context.tr('pickup_address'),
-                            border: InputBorder.none,
+                          controller: _estimatedDistanceController,
+                          keyboardType: const TextInputType.numberWithOptions(
+                            decimal: true,
                           ),
+                          decoration: InputDecoration(
+                            border: InputBorder.none,
+                            labelText: context.tr('estimated_distance_meter'),
+                            hintText: context.tr('optional'),
+                          ),
+                          onChanged: (_) => setState(() {}),
+                        ),
+                        if (selectedRows.isNotEmpty ||
+                            _selectedServiceRow.isNotEmpty) ...[
+                          const Divider(height: 16),
+                          Align(
+                            alignment: Alignment.centerRight,
+                            child: Text(
+                              context
+                                  .tr('initial_estimate_with_value')
+                                  .replaceAll(
+                                    '{value}',
+                                    _calculatedEstimate.toStringAsFixed(2),
+                                  )
+                                  .replaceAll('{currency}', context.tr('sar')),
+                              style: const TextStyle(
+                                fontWeight: FontWeight.bold,
+                                color: AppColors.gray800,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.white,
+                      borderRadius: BorderRadius.circular(12),
+                      boxShadow: AppShadows.sm,
+                    ),
+                    child: Column(
+                      children: [
+                        _buildAddressTile(
+                          title: context.tr('pickup_address'),
+                          addressData: _pickupAddressData,
+                          onTap: () => _pickAddress(isPickup: true),
                         ),
                         const Divider(height: 1),
-                        TextField(
-                          controller: _dropoffCityController,
-                          decoration: InputDecoration(
-                            labelText: context.tr('dropoff_city'),
-                            border: InputBorder.none,
-                          ),
-                        ),
-                        const Divider(height: 1),
-                        TextField(
-                          controller: _dropoffAddressController,
-                          decoration: InputDecoration(
-                            labelText: context.tr('dropoff_address'),
-                            border: InputBorder.none,
-                          ),
+                        _buildAddressTile(
+                          title: context.tr('dropoff_address'),
+                          addressData: _dropoffAddressData,
+                          onTap: () => _pickAddress(isPickup: false),
                         ),
                       ],
                     ),
@@ -789,7 +887,21 @@ class _FurnitureRequestScreenState extends State<FurnitureRequestScreen> {
                             setState(() => _agreedToTerms = value ?? false),
                         activeColor: AppColors.primary,
                       ),
-                      Expanded(child: Text(context.tr('agree_service_terms'))),
+                      Expanded(
+                        child: InkWell(
+                          onTap: _openTermsPage,
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 8),
+                            child: Text(
+                              context.tr('agree_service_terms'),
+                              style: const TextStyle(
+                                color: AppColors.gray700,
+                                decoration: TextDecoration.underline,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
                   ),
                   const SizedBox(height: 8),

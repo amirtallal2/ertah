@@ -1,29 +1,63 @@
-/// Settings Service
-/// خدمة الإعدادات
+// Settings Service
+// خدمة الإعدادات
 
 import 'api_service.dart';
 
 class SettingsService {
   final ApiService _api = ApiService();
 
+  Map<String, dynamic>? _langParams(String? lang) {
+    final normalized = (lang ?? '').trim().toLowerCase();
+    if (normalized.isEmpty) return null;
+    return {'lang': normalized};
+  }
+
   /// Get app settings
-  Future<ApiResponse> getAppSettings() async {
-    return await _api.get('/mobile/settings.php?action=app');
+  Future<ApiResponse> getAppSettings({String? lang}) async {
+    return await _api.get(
+      '/mobile/settings.php?action=app',
+      params: _langParams(lang),
+    );
   }
 
   /// Get about us
-  Future<ApiResponse> getAbout() async {
-    return await _api.get('/mobile/settings.php?action=about');
+  Future<ApiResponse> getAbout({String? lang}) async {
+    return await _api.get(
+      '/mobile/settings.php?action=about',
+      params: _langParams(lang),
+    );
+  }
+
+  /// Get any managed static content page
+  Future<ApiResponse> getContentPage(String action, {String? lang}) async {
+    return await _api.get(
+      '/mobile/settings.php?action=$action',
+      params: _langParams(lang),
+    );
   }
 
   /// Get terms and conditions
-  Future<ApiResponse> getTerms() async {
-    return await _api.get('/mobile/settings.php?action=terms');
+  Future<ApiResponse> getTerms({String? lang}) async {
+    return await _api.get(
+      '/mobile/settings.php?action=terms',
+      params: _langParams(lang),
+    );
   }
 
   /// Get privacy policy
-  Future<ApiResponse> getPrivacy() async {
-    return await _api.get('/mobile/settings.php?action=privacy');
+  Future<ApiResponse> getPrivacy({String? lang}) async {
+    return await _api.get(
+      '/mobile/settings.php?action=privacy',
+      params: _langParams(lang),
+    );
+  }
+
+  /// Get refund policy
+  Future<ApiResponse> getRefund({String? lang}) async {
+    return await _api.get(
+      '/mobile/settings.php?action=refund',
+      params: _langParams(lang),
+    );
   }
 
   /// Get contact info

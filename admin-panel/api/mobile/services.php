@@ -20,10 +20,12 @@ require_once __DIR__ . '/../../includes/database.php';
 require_once __DIR__ . '/../../includes/functions.php';
 require_once __DIR__ . '/../../includes/service_areas.php';
 require_once __DIR__ . '/../../includes/special_services.php';
+require_once __DIR__ . '/../../includes/inspection_pricing.php';
 
 ensureSpecialServicesSchema();
 ensureServicesMultilingualSchemaForApi();
 serviceAreaEnsureServiceLinksSchema();
+inspectionPricingEnsureSchema();
 
 $action = $_GET['action'] ?? 'list';
 
@@ -260,7 +262,7 @@ function getCategories()
             $categories[] = $item;
         }
         $categories = array_merge($categories, getSpecialServiceCategories());
-        usort($categories, fn($a, $b) => ((int) ($a['sort_order'] ?? 0)) <=> ((int) ($b['sort_order'] ?? 0)));
+        $categories = deduplicateServiceCategoriesForApi($categories);
         sendSuccess($categories);
     }
 
@@ -329,7 +331,7 @@ function getCategories()
     unset($category);
 
     $mainCategories = array_merge($mainCategories, getSpecialServiceCategories());
-    usort($mainCategories, fn($a, $b) => ((int) ($a['sort_order'] ?? 0)) <=> ((int) ($b['sort_order'] ?? 0)));
+    $mainCategories = deduplicateServiceCategoriesForApi($mainCategories);
 
     sendSuccess($mainCategories);
 }
@@ -386,7 +388,8 @@ function getCategoryDetail()
 
     $subServices = [];
     if (tableExists('services')) {
-        $servicesSql = "SELECT s.id, s.category_id, s.name_ar, s.name_en, s.name_ur, s.description_ar, s.description_en, s.description_ur, s.price, s.image
+        $servicesSql = "SELECT s.id, s.category_id, s.name_ar, s.name_en, s.name_ur, s.description_ar, s.description_en, s.description_ur, s.price, s.image,
+                               s.inspection_pricing_mode, s.inspection_fee, s.inspection_details_ar, s.inspection_details_en, s.inspection_details_ur
                         FROM services s
                         WHERE s.category_id = ? AND s.is_active = 1 AND {$visibility['sql']}
                         ORDER BY s.id ASC";
@@ -410,9 +413,14 @@ function getCategoryDetail()
                     'description' => !empty($service['description_ar'])
                         ? $service['description_ar']
                         : (!empty($service['description_ur']) ? $service['description_ur'] : ($service['description_en'] ?? '')),
-                    'price' => (float) ($service['price'] ?? 0),
-                    'image' => $service['image'] ?? null
-                ];
+	                    'price' => (float) ($service['price'] ?? 0),
+	                    'image' => $service['image'] ?? null,
+	                    'inspection_pricing_mode' => inspectionPricingNormalizeMode($service['inspection_pricing_mode'] ?? 'inherit', true),
+	                    'inspection_fee' => inspectionPricingNormalizeFee($service['inspection_fee'] ?? 0),
+	                    'inspection_details_ar' => $service['inspection_details_ar'] ?? '',
+	                    'inspection_details_en' => $service['inspection_details_en'] ?? '',
+	                    'inspection_details_ur' => $service['inspection_details_ur'] ?? ''
+	                ];
             }
         }
     }
@@ -518,11 +526,16 @@ function getFeaturedServices()
         ? 'c.name_ur AS category_name_ur'
         : 'c.name_en AS category_name_ur';
 
-    $sql = "SELECT s.id, s.category_id, s.name_ar, s.name_en, s.name_ur, s.description_ar, s.description_en, s.description_ur,
-                   s.image, s.price,
-                   {$featuredDemand['requests_expr']} AS requests_count,
+	    $sql = "SELECT s.id, s.category_id, s.name_ar, s.name_en, s.name_ur, s.description_ar, s.description_en, s.description_ur,
+	                   s.image, s.price, s.inspection_pricing_mode, s.inspection_fee, s.inspection_details_ar, s.inspection_details_en, s.inspection_details_ur,
+	                   {$featuredDemand['requests_expr']} AS requests_count,
                    {$ratingExpr} AS rating,
-                   c.name_ar AS category_name_ar, c.name_en AS category_name_en, {$categoryNameUrExpr}
+	                   c.name_ar AS category_name_ar, c.name_en AS category_name_en, {$categoryNameUrExpr},
+	                   c.inspection_pricing_mode AS category_inspection_pricing_mode,
+	                   c.inspection_fee AS category_inspection_fee,
+	                   c.inspection_details_ar AS category_inspection_details_ar,
+	                   c.inspection_details_en AS category_inspection_details_en,
+	                   c.inspection_details_ur AS category_inspection_details_ur
             FROM services s
             LEFT JOIN service_categories c ON s.category_id = c.id
             {$featuredDemand['joins_sql']}
@@ -569,12 +582,22 @@ function getFeaturedServices()
             'description_ar' => $row['description_ar'] ?? '',
             'description_en' => $row['description_en'] ?? '',
             'description_ur' => $row['description_ur'] ?? ($row['description_en'] ?? ($row['description_ar'] ?? '')),
-            'category_name_ar' => $categoryInfo['name_ar'],
-            'category_name_en' => $categoryInfo['name_en'],
-            'category_name_ur' => $categoryInfo['name_ur'],
-            'image' => isset($row['image']) ? imageUrl($row['image']) : null,
-            'price' => (float) ($row['price'] ?? 0),
-            'requests_count' => (int) ($row['requests_count'] ?? 0),
+	            'category_name_ar' => $categoryInfo['name_ar'],
+	            'category_name_en' => $categoryInfo['name_en'],
+	            'category_name_ur' => $categoryInfo['name_ur'],
+	            'category_inspection_pricing_mode' => inspectionPricingNormalizeMode($row['category_inspection_pricing_mode'] ?? 'free', false),
+	            'category_inspection_fee' => inspectionPricingNormalizeFee($row['category_inspection_fee'] ?? 0),
+	            'category_inspection_details_ar' => $row['category_inspection_details_ar'] ?? '',
+	            'category_inspection_details_en' => $row['category_inspection_details_en'] ?? '',
+	            'category_inspection_details_ur' => $row['category_inspection_details_ur'] ?? '',
+	            'image' => isset($row['image']) ? imageUrl($row['image']) : null,
+	            'price' => (float) ($row['price'] ?? 0),
+	            'inspection_pricing_mode' => inspectionPricingNormalizeMode($row['inspection_pricing_mode'] ?? 'inherit', true),
+	            'inspection_fee' => inspectionPricingNormalizeFee($row['inspection_fee'] ?? 0),
+	            'inspection_details_ar' => $row['inspection_details_ar'] ?? '',
+	            'inspection_details_en' => $row['inspection_details_en'] ?? '',
+	            'inspection_details_ur' => $row['inspection_details_ur'] ?? '',
+	            'requests_count' => (int) ($row['requests_count'] ?? 0),
             'rating' => (float) ($row['rating'] ?? 0),
         ];
     }
@@ -588,18 +611,25 @@ function mapCategory(array $row): array
     if (array_key_exists('parent_id', $row) && $row['parent_id'] !== null && $row['parent_id'] !== '') {
         $parentId = (int) $row['parent_id'];
     }
+    $nameAr = $row['name_ar'] ?? '';
+    $nameEn = $row['name_en'] ?? '';
 
     return [
         'id' => (int) ($row['id'] ?? 0),
         'parent_id' => $parentId,
-        'name_ar' => $row['name_ar'] ?? '',
-        'name_en' => $row['name_en'] ?? '',
-        'name_ur' => $row['name_ur'] ?? (($row['name_en'] ?? '') !== '' ? $row['name_en'] : ($row['name_ar'] ?? '')),
-        'icon' => $row['icon'] ?? null,
-        'image' => $row['image'] ?? null,
-        'special_module' => $row['special_module'] ?? null,
-        'warranty_days' => isset($row['warranty_days']) ? (int) $row['warranty_days'] : 14,
-        'sort_order' => isset($row['sort_order']) ? (int) $row['sort_order'] : 0,
+        'name_ar' => $nameAr,
+        'name_en' => $nameEn,
+        'name_ur' => $row['name_ur'] ?? (($nameEn ?? '') !== '' ? $nameEn : $nameAr),
+        'icon' => serviceCategoryIconForApi($row['icon'] ?? null, $nameAr, $nameEn),
+        'image' => serviceCategoryImageForApi($row['image'] ?? null),
+	        'special_module' => $row['special_module'] ?? null,
+	        'warranty_days' => isset($row['warranty_days']) ? (int) $row['warranty_days'] : 14,
+	        'inspection_pricing_mode' => inspectionPricingNormalizeMode($row['inspection_pricing_mode'] ?? 'free', false),
+	        'inspection_fee' => inspectionPricingNormalizeFee($row['inspection_fee'] ?? 0),
+	        'inspection_details_ar' => $row['inspection_details_ar'] ?? '',
+	        'inspection_details_en' => $row['inspection_details_en'] ?? '',
+	        'inspection_details_ur' => $row['inspection_details_ur'] ?? '',
+	        'sort_order' => isset($row['sort_order']) ? (int) $row['sort_order'] : 0,
     ];
 }
 

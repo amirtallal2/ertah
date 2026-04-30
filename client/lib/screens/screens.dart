@@ -21,6 +21,7 @@ export 'complaints_screen.dart';
 export 'help_center_screen.dart';
 export 'privacy_policy_screen.dart';
 export 'terms_and_conditions_screen.dart';
+export 'static_content_page_screen.dart';
 export 'app_settings_screen.dart';
 export 'service_details_screen.dart';
 export 'service_selection_screen.dart';

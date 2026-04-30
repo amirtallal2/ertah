@@ -6,46 +6,11 @@
 
 require_once '../init.php';
 requireLogin();
+require_once '../includes/complaint_support.php';
 
 function complaintsEnsureRepliesSchema(): void
 {
-    static $ensured = false;
-    if ($ensured) {
-        return;
-    }
-    $ensured = true;
-    $GLOBALS['complaints_columns_cache'] = [];
-
-    try {
-        db()->query(
-            "CREATE TABLE IF NOT EXISTS `complaint_replies` (
-                `id` INT AUTO_INCREMENT PRIMARY KEY,
-                `complaint_id` INT NOT NULL,
-                `user_id` INT NULL,
-                `admin_id` INT NULL,
-                `message` TEXT NOT NULL,
-                `attachments` LONGTEXT NULL,
-                `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                INDEX `idx_complaint_replies_complaint` (`complaint_id`),
-                INDEX `idx_complaint_replies_user` (`user_id`),
-                INDEX `idx_complaint_replies_admin` (`admin_id`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci"
-        );
-    } catch (Throwable $e) {
-        // لا نوقف الصفحة إذا تعذر إنشاء الجدول تلقائياً.
-    }
-
-    // توافق رجعي مع قواعد بيانات قديمة
-    complaintsEnsureColumn('complaint_replies', 'complaint_id', 'INT NOT NULL');
-    complaintsEnsureColumn('complaint_replies', 'user_id', 'INT NULL');
-    complaintsEnsureColumn('complaint_replies', 'admin_id', 'INT NULL');
-    complaintsEnsureColumn('complaint_replies', 'message', 'TEXT NOT NULL');
-    complaintsEnsureColumn('complaint_replies', 'attachments', 'LONGTEXT NULL');
-    complaintsEnsureColumn('complaint_replies', 'sender_type', "VARCHAR(20) NULL");
-    complaintsEnsureColumn('complaint_replies', 'created_at', 'TIMESTAMP DEFAULT CURRENT_TIMESTAMP');
-    complaintsEnsureIndex('complaint_replies', 'idx_complaint_replies_complaint', ['complaint_id']);
-    complaintsEnsureIndex('complaint_replies', 'idx_complaint_replies_user', ['user_id']);
-    complaintsEnsureIndex('complaint_replies', 'idx_complaint_replies_admin', ['admin_id']);
+    complaintSupportEnsureRepliesSchema();
 }
 
 complaintsEnsureRepliesSchema();
@@ -62,105 +27,22 @@ $id = (int) get('id');
 
 function complaintsTableHasColumn($table, $column)
 {
-    $cache = &$GLOBALS['complaints_columns_cache'];
-    if (!is_array($cache)) {
-        $cache = [];
-    }
-    $cacheKey = $table . '.' . $column;
-    if (array_key_exists($cacheKey, $cache)) {
-        return $cache[$cacheKey];
-    }
-
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $table);
-    $safeColumn = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $column);
-    if ($safeTable === '' || $safeColumn === '') {
-        $cache[$cacheKey] = false;
-        return false;
-    }
-
-    try {
-        $row = db()->fetch("SHOW COLUMNS FROM `{$safeTable}` LIKE ?", [$safeColumn]);
-        $cache[$cacheKey] = !empty($row);
-    } catch (Throwable $e) {
-        $cache[$cacheKey] = false;
-    }
-    return $cache[$cacheKey];
+    return complaintSupportTableHasColumn((string) $table, (string) $column);
 }
 
 function complaintsTableExists($table): bool
 {
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $table);
-    if ($safeTable === '') {
-        return false;
-    }
-
-    try {
-        $row = db()->fetch("SHOW TABLES LIKE ?", [$safeTable]);
-        return !empty($row);
-    } catch (Throwable $e) {
-        return false;
-    }
+    return complaintSupportTableExists((string) $table);
 }
 
 function complaintsEnsureColumn($table, $column, $definition): void
 {
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $table);
-    $safeColumn = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $column);
-    if ($safeTable === '' || $safeColumn === '') {
-        return;
-    }
-
-    if (!complaintsTableExists($safeTable)) {
-        return;
-    }
-
-    if (!complaintsTableHasColumn($safeTable, $safeColumn)) {
-        try {
-            db()->query("ALTER TABLE `{$safeTable}` ADD COLUMN `{$safeColumn}` {$definition}");
-            $cacheKey = $safeTable . '.' . $safeColumn;
-            if (!isset($GLOBALS['complaints_columns_cache']) || !is_array($GLOBALS['complaints_columns_cache'])) {
-                $GLOBALS['complaints_columns_cache'] = [];
-            }
-            $GLOBALS['complaints_columns_cache'][$cacheKey] = true;
-        } catch (Throwable $e) {
-            // تجاهل أخطاء التعديل لضمان عدم تعطيل الصفحة.
-        }
-    }
+    complaintSupportEnsureColumn((string) $table, (string) $column, (string) $definition);
 }
 
 function complaintsEnsureIndex($table, $index, array $columns): void
 {
-    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $table);
-    $safeIndex = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $index);
-    if ($safeTable === '' || $safeIndex === '' || empty($columns)) {
-        return;
-    }
-
-    if (!complaintsTableExists($safeTable)) {
-        return;
-    }
-
-    try {
-        $row = db()->fetch("SHOW INDEX FROM `{$safeTable}` WHERE Key_name = ?", [$safeIndex]);
-        if (!empty($row)) {
-            return;
-        }
-
-        $safeColumns = [];
-        foreach ($columns as $column) {
-            $safeCol = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $column);
-            if ($safeCol !== '') {
-                $safeColumns[] = "`{$safeCol}`";
-            }
-        }
-        if (empty($safeColumns)) {
-            return;
-        }
-
-        db()->query("ALTER TABLE `{$safeTable}` ADD INDEX `{$safeIndex}` (" . implode(', ', $safeColumns) . ")");
-    } catch (Throwable $e) {
-        // تجاهل أخطاء التعديل.
-    }
+    complaintSupportEnsureIndex((string) $table, (string) $index, $columns);
 }
 
 function decodeComplaintAttachmentPaths($rawValue)
@@ -271,8 +153,11 @@ function complaintStatusMeta($status)
 
 function fetchComplaintRepliesForAdmin($complaintId)
 {
+    $replyColumnsMeta = complaintSupportColumnsMeta('complaint_replies');
+    $replyMessageSelect = complaintSupportReplyMessageSelectSql($replyColumnsMeta, 'r');
     $rows = db()->fetchAll(
         "SELECT r.*,
+                {$replyMessageSelect},
                 u.full_name AS user_name,
                 a.username AS admin_name
          FROM complaint_replies r
@@ -295,7 +180,7 @@ function fetchComplaintRepliesForAdmin($complaintId)
             'id' => (int) ($row['id'] ?? 0),
             'sender_type' => $senderType,
             'sender_name' => $senderName,
-            'message' => (string) ($row['message'] ?? ''),
+            'message' => (string) ($row['reply_message'] ?? $row['message'] ?? ''),
             'created_at' => (string) ($row['created_at'] ?? ''),
             'attachments' => mapComplaintAttachmentUrls($row['attachments'] ?? null),
         ];
@@ -393,55 +278,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $replyText = 'صورة مرفقة';
             }
 
-            $replyData = [];
-            if (complaintsTableHasColumn('complaint_replies', 'complaint_id')) {
-                $replyData['complaint_id'] = $complaintId;
-            }
-
-            if (complaintsTableHasColumn('complaint_replies', 'admin_id')) {
-                $replyData['admin_id'] = $_SESSION['admin_id'] ?? null;
-            }
-
-            if (complaintsTableHasColumn('complaint_replies', 'sender_type')) {
-                $replyData['sender_type'] = 'admin';
-            }
-
-            $messageColumn = null;
-            foreach (['message', 'reply', 'content', 'body', 'text'] as $candidate) {
-                if (complaintsTableHasColumn('complaint_replies', $candidate)) {
-                    $messageColumn = $candidate;
-                    break;
-                }
-            }
-
-            if ($messageColumn) {
-                $replyData[$messageColumn] = $replyText;
-            }
-
-            if (complaintsTableHasColumn('complaint_replies', 'attachments') && !empty($replyAttachmentPaths)) {
-                $replyData['attachments'] = json_encode($replyAttachmentPaths, JSON_UNESCAPED_UNICODE);
-            }
-
-            if (complaintsTableHasColumn('complaint_replies', 'created_at')) {
-                $replyData['created_at'] = date('Y-m-d H:i:s');
-            }
+            $replyColumnsMeta = complaintSupportColumnsMeta('complaint_replies');
+            $replyData = complaintSupportBuildReplyInsertData(
+                $replyColumnsMeta,
+                [
+                    'complaint_id' => $complaintId,
+                    'user_id' => null,
+                    'admin_id' => isset($_SESSION['admin_id']) ? (int) $_SESSION['admin_id'] : null,
+                    'sender_type' => 'admin',
+                    'message' => $replyText,
+                    'attachment_paths' => $replyAttachmentPaths,
+                ]
+            );
 
             if (empty($replyData) || empty($replyData['complaint_id'])) {
                 throw new RuntimeException('Replies table schema is incomplete');
             }
 
-            if ($messageColumn === null && $replyText !== '') {
-                throw new RuntimeException('Replies table does not include a message column');
-            }
-
             db()->insert('complaint_replies', $replyData);
+
+            if (complaintsTableHasColumn('complaints', 'updated_at')) {
+                db()->query(
+                    "UPDATE `complaints` SET `updated_at` = ? WHERE `id` = ?",
+                    [date('Y-m-d H:i:s'), $complaintId]
+                );
+            }
         }
 
         logActivity('update_complaint', 'complaints', $complaintId);
         setFlashMessage('success', 'تم تحديث التذكرة بنجاح');
     } catch (Throwable $e) {
         error_log('complaints.php update failed: ' . $e->getMessage());
-        setFlashMessage('danger', 'تعذر إرسال الرد حالياً. تحقق من بنية الجداول ثم أعد المحاولة.');
+        setFlashMessage('danger', 'تعذر إرسال الرد حالياً. أعد المحاولة، وإذا استمرت المشكلة راجع سجل الأخطاء.');
     }
     redirect($complaintsPagePath . "?action=view&id=$complaintId");
 }

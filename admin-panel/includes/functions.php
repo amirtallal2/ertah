@@ -197,6 +197,185 @@ function imageUrl($path, $default = 'assets/images/default.png')
     return APP_URL . '/uploads/' . $path;
 }
 
+function mediaValueLooksLikeFile($value)
+{
+    $value = trim((string) $value);
+    if ($value === '') {
+        return false;
+    }
+
+    if (filter_var($value, FILTER_VALIDATE_URL)) {
+        return true;
+    }
+
+    if (strpos($value, '/') !== false || strpos($value, '\\') !== false) {
+        return true;
+    }
+
+    return (bool) preg_match('/\.(png|jpe?g|gif|webp|svg|avif)$/i', $value);
+}
+
+function mediaUrlOrNull($value)
+{
+    $value = trim((string) $value);
+    if ($value === '' || !mediaValueLooksLikeFile($value)) {
+        return null;
+    }
+
+    return imageUrl($value);
+}
+
+function normalizeServiceCategoryLabel($value)
+{
+    $value = trim((string) $value);
+    $value = str_replace(['أ', 'إ', 'آ', 'ى', 'ة'], ['ا', 'ا', 'ا', 'ي', 'ه'], $value);
+    $value = preg_replace('/\s+/u', ' ', $value);
+    return strtolower($value);
+}
+
+function isOtherServiceCategoryLabel($nameAr, $nameEn = '')
+{
+    $ar = normalizeServiceCategoryLabel($nameAr);
+    $en = normalizeServiceCategoryLabel($nameEn);
+
+    if ($ar !== '' && strpos($ar, 'خدم') !== false && strpos($ar, 'اخر') !== false) {
+        return true;
+    }
+
+    if (in_array($en, ['other', 'other service', 'other services'], true)) {
+        return true;
+    }
+
+    return $en !== '' && strpos($en, 'other') !== false && strpos($en, 'service') !== false;
+}
+
+function serviceCategoryImageForApi($image)
+{
+    return mediaUrlOrNull($image);
+}
+
+function serviceCategoryIconForApi($icon, $nameAr = '', $nameEn = '')
+{
+    $icon = trim((string) $icon);
+    if ($icon === '') {
+        return null;
+    }
+
+    if (mediaValueLooksLikeFile($icon)) {
+        return imageUrl($icon);
+    }
+
+    if (isOtherServiceCategoryLabel($nameAr, $nameEn)) {
+        return null;
+    }
+
+    return $icon;
+}
+
+function serviceCategoryPrimaryMediaForApi($icon, $image, $nameAr = '', $nameEn = '')
+{
+    $imageUrl = serviceCategoryImageForApi($image);
+    $iconValue = serviceCategoryIconForApi($icon, $nameAr, $nameEn);
+
+    if (isOtherServiceCategoryLabel($nameAr, $nameEn) && $imageUrl !== null) {
+        return $imageUrl;
+    }
+
+    return $iconValue ?? $imageUrl;
+}
+
+function serviceCategoryDedupeKeyForApi(array $category)
+{
+    $specialModule = trim((string) ($category['special_module'] ?? ''));
+    if ($specialModule !== '') {
+        return 'module:' . strtolower($specialModule);
+    }
+
+    $nameAr = $category['name_ar'] ?? '';
+    $nameEn = $category['name_en'] ?? '';
+    if (isOtherServiceCategoryLabel($nameAr, $nameEn)) {
+        return 'category:other_service';
+    }
+
+    $label = normalizeServiceCategoryLabel($nameAr) . '|' . normalizeServiceCategoryLabel($nameEn);
+    if ($label === '|') {
+        return 'id:' . (int) ($category['id'] ?? 0);
+    }
+
+    $parentId = (int) ($category['parent_id'] ?? 0);
+    return 'category:' . $parentId . ':' . $label;
+}
+
+function serviceCategoryApiRank(array $category)
+{
+    $rank = 0;
+    if (!empty($category['image']) && mediaValueLooksLikeFile($category['image'])) {
+        $rank += 100;
+    }
+    if (!empty($category['icon']) && mediaValueLooksLikeFile($category['icon'])) {
+        $rank += 25;
+    }
+    if (!array_key_exists('is_active', $category) || (int) $category['is_active'] === 1 || $category['is_active'] === true) {
+        $rank += 10;
+    }
+
+    $sortOrder = (int) ($category['sort_order'] ?? 0);
+    $id = (int) ($category['id'] ?? 0);
+    return [$rank, -$sortOrder, -$id];
+}
+
+function serviceCategoryApiCandidateIsBetter(array $candidate, array $current)
+{
+    $candidateRank = serviceCategoryApiRank($candidate);
+    $currentRank = serviceCategoryApiRank($current);
+
+    for ($i = 0; $i < count($candidateRank); $i++) {
+        if ($candidateRank[$i] === $currentRank[$i]) {
+            continue;
+        }
+        return $candidateRank[$i] > $currentRank[$i];
+    }
+
+    return false;
+}
+
+function deduplicateServiceCategoriesForApi(array $categories)
+{
+    $byKey = [];
+    $order = [];
+
+    foreach ($categories as $category) {
+        if (!is_array($category)) {
+            continue;
+        }
+
+        if (isset($category['sub_categories']) && is_array($category['sub_categories'])) {
+            $category['sub_categories'] = deduplicateServiceCategoriesForApi($category['sub_categories']);
+        }
+
+        $key = serviceCategoryDedupeKeyForApi($category);
+        if (!isset($byKey[$key])) {
+            $byKey[$key] = $category;
+            $order[] = $key;
+            continue;
+        }
+
+        if (serviceCategoryApiCandidateIsBetter($category, $byKey[$key])) {
+            $byKey[$key] = $category;
+        }
+    }
+
+    $result = [];
+    foreach ($order as $key) {
+        if (isset($byKey[$key])) {
+            $result[] = $byKey[$key];
+        }
+    }
+
+    usort($result, fn($a, $b) => ((int) ($a['sort_order'] ?? 0)) <=> ((int) ($b['sort_order'] ?? 0)));
+    return $result;
+}
+
 /**
  * توليد رمز عشوائي
  */

@@ -6,6 +6,7 @@
 
 require_once '../init.php';
 requireLogin();
+require_once '../includes/provider_finance.php';
 
 $pageTitle = 'الطلبات';
 $pageSubtitle = 'إدارة طلبات الخدمات';
@@ -185,6 +186,113 @@ function normalizeOrderProblemDetailsForAdmin($problemDetailsRaw): array
     }
 
     return [];
+}
+
+function normalizeAdminIntegerIds($value): array
+{
+    $ids = [];
+    $push = static function ($raw) use (&$ids) {
+        $id = (int) $raw;
+        if ($id > 0) {
+            $ids[$id] = $id;
+        }
+    };
+
+    if (is_object($value)) {
+        $value = (array) $value;
+    }
+
+    if (is_array($value)) {
+        foreach ($value as $item) {
+            $push($item);
+        }
+        return array_values($ids);
+    }
+
+    if (is_numeric($value)) {
+        $push($value);
+        return array_values($ids);
+    }
+
+    if (!is_string($value)) {
+        return [];
+    }
+
+    $trimmed = trim($value);
+    if ($trimmed === '') {
+        return [];
+    }
+
+    $decoded = json_decode($trimmed, true);
+    if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+        foreach ($decoded as $item) {
+            $push($item);
+        }
+        return array_values($ids);
+    }
+
+    foreach (explode(',', $trimmed) as $item) {
+        $push(trim($item));
+    }
+
+    return array_values($ids);
+}
+
+function normalizeProblemTypeIdsForAdmin(array $details, $fallbackId = null): array
+{
+    $ids = array_merge(
+        normalizeAdminIntegerIds($details['problem_type_ids'] ?? []),
+        normalizeAdminIntegerIds($details['type_option_ids'] ?? [])
+    );
+
+    if (!empty($details['type_option_id'])) {
+        $ids = array_merge($ids, normalizeAdminIntegerIds($details['type_option_id']));
+    }
+
+    if ($fallbackId !== null && $fallbackId !== '') {
+        $ids = array_merge($ids, normalizeAdminIntegerIds($fallbackId));
+    }
+
+    return array_values(array_unique(array_filter(array_map('intval', $ids), static fn($id) => $id > 0)));
+}
+
+function fetchProblemTypeLabelsByIdsForAdmin(array $ids): array
+{
+    $ids = array_values(array_unique(array_filter(array_map('intval', $ids), static fn($id) => $id > 0)));
+    if (empty($ids) || !tableExistsByName('problem_detail_options')) {
+        return [];
+    }
+
+    $placeholders = implode(',', array_fill(0, count($ids), '?'));
+    $rows = db()->fetchAll(
+        "SELECT id, title_ar, title_en, title_ur
+         FROM problem_detail_options
+         WHERE id IN ($placeholders)",
+        $ids
+    );
+
+    $labelsById = [];
+    foreach ($rows as $row) {
+        $label = trim((string) ($row['title_ar'] ?? ''));
+        if ($label === '') {
+            $label = trim((string) ($row['title_en'] ?? ''));
+        }
+        if ($label === '') {
+            $label = trim((string) ($row['title_ur'] ?? ''));
+        }
+        if ($label !== '') {
+            $labelsById[(int) $row['id']] = $label;
+        }
+    }
+
+    $labels = [];
+    foreach ($ids as $id) {
+        if (!empty($labelsById[$id]) && !in_array($labelsById[$id], $labels, true)) {
+            $labels[] = $labelsById[$id];
+        }
+    }
+
+    return $labels;
 }
 
 function detectSpecialOrderModuleForAdmin($problemDetailsRaw): string
@@ -915,6 +1023,7 @@ function fetchOrderAssignedProvidersForAdmin($orderId, array $orderRow = [])
              FROM order_providers op
              LEFT JOIN providers p ON p.id = op.provider_id
              WHERE op.order_id = ?
+               AND op.assignment_status NOT IN ('cancelled', 'rejected')
              ORDER BY op.id ASC",
             [$orderId]
         );
@@ -951,51 +1060,158 @@ function fetchOrderAssignedProvidersForAdmin($orderId, array $orderRow = [])
     return $items;
 }
 
-function assignProvidersToOrderForAdmin($orderId, array $providerIds, &$resolvedProviderIds = [])
+function assignProvidersToOrderForAdmin($orderId, array $providerIds, &$resolvedProviderIds = [], &$syncSummary = [])
 {
+    $orderId = (int) $orderId;
     $providerIds = normalizeIntegerList($providerIds);
-    if (empty($providerIds)) {
-        $resolvedProviderIds = [];
+    $resolvedProviderIds = [];
+    $syncSummary = [
+        'selected_provider_ids' => [],
+        'added_provider_ids' => [],
+        'removed_provider_ids' => [],
+        'blocked_remove_provider_ids' => [],
+        'active_provider_ids' => [],
+        'primary_provider_id' => null,
+    ];
+
+    ensureOrderRelationTables();
+
+    $order = db()->fetch("SELECT id, provider_id, status FROM orders WHERE id = ? LIMIT 1", [$orderId]);
+    if (!$order) {
         return 0;
     }
 
-    ensureOrderRelationTables();
-    $placeholders = implode(',', array_fill(0, count($providerIds), '?'));
-    $validProviders = db()->fetchAll(
-        "SELECT id FROM providers WHERE id IN ($placeholders) AND status = 'approved'",
-        $providerIds
-    );
     $validIds = [];
-    foreach ($validProviders as $provider) {
-        $validIds[] = (int) $provider['id'];
+    if (!empty($providerIds)) {
+        $placeholders = implode(',', array_fill(0, count($providerIds), '?'));
+        $validProviders = db()->fetchAll(
+            "SELECT id FROM providers WHERE id IN ($placeholders) AND status = 'approved'",
+            $providerIds
+        );
+        $validLookup = [];
+        foreach ($validProviders as $provider) {
+            $validLookup[(int) $provider['id']] = true;
+        }
+        foreach ($providerIds as $providerId) {
+            if (!empty($validLookup[$providerId]) && !in_array($providerId, $validIds, true)) {
+                $validIds[] = $providerId;
+            }
+        }
     }
-    if (empty($validIds)) {
-        $resolvedProviderIds = [];
-        return 0;
+    $currentRows = db()->fetchAll(
+        "SELECT provider_id, assignment_status
+         FROM order_providers
+         WHERE order_id = ?",
+        [$orderId]
+    );
+    $currentStatusByProvider = [];
+    foreach ($currentRows as $row) {
+        $providerId = (int) ($row['provider_id'] ?? 0);
+        if ($providerId > 0) {
+            $currentStatusByProvider[$providerId] = strtolower((string) ($row['assignment_status'] ?? 'assigned'));
+        }
+    }
+
+    foreach ($providerIds as $providerId) {
+        if (
+            !empty($currentStatusByProvider[$providerId])
+            && !in_array($providerId, $validIds, true)
+        ) {
+            $validIds[] = $providerId;
+        }
     }
     $resolvedProviderIds = $validIds;
+    $syncSummary['selected_provider_ids'] = $validIds;
+
+    $protectedStatuses = ['accepted', 'in_progress', 'completed', 'on_the_way', 'arrived'];
+    $removeIds = [];
+    foreach ($currentStatusByProvider as $providerId => $assignmentStatus) {
+        if (in_array($providerId, $validIds, true)) {
+            continue;
+        }
+        if (in_array($assignmentStatus, $protectedStatuses, true)) {
+            $syncSummary['blocked_remove_provider_ids'][] = $providerId;
+            continue;
+        }
+        $removeIds[] = $providerId;
+    }
+
+    if (!empty($removeIds)) {
+        $removePlaceholders = implode(',', array_fill(0, count($removeIds), '?'));
+        db()->query(
+            "DELETE FROM order_providers
+             WHERE order_id = ?
+               AND provider_id IN ($removePlaceholders)",
+            array_merge([$orderId], $removeIds)
+        );
+        $syncSummary['removed_provider_ids'] = $removeIds;
+    }
 
     $inserted = 0;
     foreach ($validIds as $providerId) {
+        $previousStatus = $currentStatusByProvider[$providerId] ?? '';
         db()->query(
             "INSERT INTO order_providers (order_id, provider_id, assignment_status, assigned_at)
              VALUES (?, ?, 'assigned', NOW())
              ON DUPLICATE KEY UPDATE
-                assignment_status = IF(assignment_status = 'completed', assignment_status, 'assigned'),
+                assignment_status = CASE
+                    WHEN assignment_status IN ('accepted', 'in_progress', 'completed') THEN assignment_status
+                    ELSE 'assigned'
+                END,
                 assigned_at = COALESCE(assigned_at, NOW())",
             [$orderId, $providerId]
         );
+        if ($previousStatus === '' || in_array($previousStatus, ['cancelled', 'rejected'], true)) {
+            $syncSummary['added_provider_ids'][] = $providerId;
+        }
         $inserted++;
     }
 
-    $primaryProviderId = $validIds[0];
-    db()->query(
-        "UPDATE orders
-         SET provider_id = COALESCE(provider_id, ?),
-             status = CASE WHEN status = 'pending' THEN 'assigned' ELSE status END
-         WHERE id = ?",
-        [$primaryProviderId, $orderId]
+    $activeRows = db()->fetchAll(
+        "SELECT provider_id, assignment_status
+         FROM order_providers
+         WHERE order_id = ?
+           AND assignment_status NOT IN ('cancelled', 'rejected')
+         ORDER BY FIELD(assignment_status, 'in_progress', 'accepted', 'completed', 'assigned'), id ASC",
+        [$orderId]
     );
+    $activeProviderIds = [];
+    foreach ($activeRows as $row) {
+        $providerId = (int) ($row['provider_id'] ?? 0);
+        if ($providerId > 0 && !in_array($providerId, $activeProviderIds, true)) {
+            $activeProviderIds[] = $providerId;
+        }
+    }
+    $syncSummary['active_provider_ids'] = $activeProviderIds;
+
+    $currentPrimaryId = (int) ($order['provider_id'] ?? 0);
+    $primaryProviderId = null;
+    if ($currentPrimaryId > 0 && in_array($currentPrimaryId, $activeProviderIds, true)) {
+        $primaryProviderId = $currentPrimaryId;
+    } elseif (!empty($validIds)) {
+        $primaryProviderId = $validIds[0];
+    } elseif (!empty($activeProviderIds)) {
+        $primaryProviderId = $activeProviderIds[0];
+    }
+    $syncSummary['primary_provider_id'] = $primaryProviderId;
+
+    if ($primaryProviderId !== null && $primaryProviderId > 0) {
+        db()->query(
+            "UPDATE orders
+             SET provider_id = ?,
+                 status = CASE WHEN status = 'pending' THEN 'assigned' ELSE status END
+             WHERE id = ?",
+            [$primaryProviderId, $orderId]
+        );
+    } else {
+        db()->query(
+            "UPDATE orders
+             SET provider_id = NULL,
+                 status = CASE WHEN status = 'assigned' THEN 'pending' ELSE status END
+             WHERE id = ?",
+            [$orderId]
+        );
+    }
 
     return $inserted;
 }
@@ -1307,6 +1523,11 @@ function markOrderAsPaidFromMyFatoorahForAdmin($orderId, $amount, $reference)
         }
 
         $pdo->commit();
+        try {
+            providerFinanceSyncOrder((int) $orderId);
+        } catch (Throwable $financeError) {
+            error_log('Admin order provider finance sync failed: ' . $financeError->getMessage());
+        }
 
         if (!$wasPaid) {
             notifyOrderCustomerFromAdmin(
@@ -1743,34 +1964,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         $providerIds = normalizeIntegerList($providerIds);
 
-        if ($orderId <= 0 || empty($providerIds)) {
-            setFlashMessage('danger', 'يرجى اختيار مقدم خدمة واحد على الأقل');
+        if ($orderId <= 0) {
+            setFlashMessage('danger', 'الطلب غير موجود');
             redirect('orders.php?action=view&id=' . $orderId);
         }
 
         $resolvedProviderIds = [];
-        $assignedCount = assignProvidersToOrderForAdmin($orderId, $providerIds, $resolvedProviderIds);
-        if ($assignedCount > 0) {
-            $providersLabel = $assignedCount > 1
-                ? ('تم ترشيح ' . $assignedCount . ' من مقدمي الخدمة')
-                : 'تم ترشيح مقدم خدمة لطلبك';
+        $syncSummary = [];
+        $assignedCount = assignProvidersToOrderForAdmin($orderId, $providerIds, $resolvedProviderIds, $syncSummary);
+        $removedProviderIds = normalizeIntegerList($syncSummary['removed_provider_ids'] ?? []);
+        $addedProviderIds = normalizeIntegerList($syncSummary['added_provider_ids'] ?? []);
+        $blockedRemoveProviderIds = normalizeIntegerList($syncSummary['blocked_remove_provider_ids'] ?? []);
+        $activeProviderIds = normalizeIntegerList($syncSummary['active_provider_ids'] ?? $resolvedProviderIds);
+
+        if (!empty($resolvedProviderIds) || !empty($removedProviderIds) || empty($providerIds)) {
+            $selectedCount = count($activeProviderIds);
+            if ($selectedCount > 0) {
+                $providersLabel = $selectedCount > 1
+                    ? ('تم تحديث ترشيح ' . $selectedCount . ' من مقدمي الخدمة')
+                    : 'تم تحديث مقدم الخدمة المرشح لطلبك';
+            } else {
+                $providersLabel = 'تم إزالة مقدمي الخدمة المرشحين مؤقتًا من طلبك';
+            }
             notifyOrderCustomerFromAdmin(
                 $orderId,
                 'تحديث على طلبك',
-                $providersLabel . '، بانتظار قبول الفني.',
-                ['event' => 'providers_assigned', 'status' => 'assigned', 'providers_count' => $assignedCount]
+                $providersLabel . ($selectedCount > 0 ? '، بانتظار قبول الفني.' : '.'),
+                ['event' => 'providers_assigned', 'status' => $selectedCount > 0 ? 'assigned' : 'pending', 'providers_count' => $selectedCount]
             );
 
-            notifyOrderProvidersFromAdmin(
-                $orderId,
-                $resolvedProviderIds,
-                'طلب خدمة جديد',
-                'تم ترشيحك لطلب جديد. راجع التفاصيل وقم بالقبول أو الرفض.',
-                ['event' => 'provider_assigned', 'status' => 'assigned']
-            );
+            if (!empty($addedProviderIds)) {
+                notifyOrderProvidersFromAdmin(
+                    $orderId,
+                    $addedProviderIds,
+                    'طلب خدمة جديد',
+                    'تم ترشيحك لطلب جديد. راجع التفاصيل وقم بالقبول أو الرفض.',
+                    ['event' => 'provider_assigned', 'status' => 'assigned']
+                );
+            }
+
+            if (!empty($removedProviderIds)) {
+                notifyOrderProvidersFromAdmin(
+                    $orderId,
+                    $removedProviderIds,
+                    'إلغاء ترشيح الطلب #' . $orderId,
+                    'تم إلغاء ترشيحك لهذا الطلب من لوحة التحكم.',
+                    ['event' => 'provider_unassigned', 'status' => 'cancelled']
+                );
+            }
+
+            try {
+                providerFinanceSyncOrder($orderId);
+            } catch (Throwable $financeError) {
+                error_log('Provider finance sync after assignment failed: ' . $financeError->getMessage());
+            }
 
             logActivity('assign_provider', 'orders', $orderId);
-            setFlashMessage('success', 'تم تحديث مقدمي الخدمة للطلب بنجاح');
+            $message = 'تم تحديث مقدمي الخدمة للطلب بنجاح';
+            if (!empty($blockedRemoveProviderIds)) {
+                $message .= '، ولم يتم حذف مقدم بدأ/قبل الطلب بالفعل.';
+            }
+            setFlashMessage('success', $message);
         } else {
             setFlashMessage('warning', 'لم يتم العثور على مقدمي خدمات صالحين للتعيين');
         }
@@ -2134,7 +2388,7 @@ $orders = db()->fetchAll("
     SELECT o.*, 
            u.full_name as user_name, u.phone as user_phone,
            p.full_name as provider_name,
-           c.name_ar as category_name, c.icon as category_icon
+           c.name_ar as category_name, c.icon as category_icon, c.image as category_image
     FROM orders o
     LEFT JOIN users u ON o.user_id = u.id
     LEFT JOIN providers p ON o.provider_id = p.id
@@ -2206,6 +2460,7 @@ if (!empty($orderIds)) {
              FROM order_providers op
              LEFT JOIN providers p ON p.id = op.provider_id
              WHERE op.order_id IN ($orderPlaceholders)
+               AND op.assignment_status NOT IN ('cancelled', 'rejected')
              ORDER BY op.id ASC",
             $orderIds
         );
@@ -2352,7 +2607,7 @@ if ($action === 'view' && $id) {
         SELECT o.*, 
                u.full_name as user_name, u.phone as user_phone, u.email as user_email {$extraUserSelect},
                p.full_name as provider_name, p.phone as provider_phone, p.rating as provider_rating,
-               c.name_ar as category_name, c.icon as category_icon,
+               c.name_ar as category_name, c.icon as category_icon, c.image as category_image,
                a.city, a.district, a.street
         FROM orders o
         LEFT JOIN users u ON o.user_id = u.id
@@ -2431,6 +2686,23 @@ if ($action === 'view' && $id) {
     if ($orderCategoryMeta && !empty($orderCategoryMeta['parent_id'])) {
         $providerCategoryIds[] = (int) $orderCategoryMeta['parent_id'];
     }
+    if ($specialOrderModule === 'furniture') {
+        foreach ($serviceCategoryById as $categoryMeta) {
+            $nameAr = (string) ($categoryMeta['name_ar'] ?? '');
+            $nameEn = strtolower((string) ($categoryMeta['name_en'] ?? ''));
+            if (
+                strpos($nameAr, 'عفش') !== false
+                || strpos($nameAr, 'أثاث') !== false
+                || strpos($nameEn, 'furniture') !== false
+                || strpos($nameEn, 'moving') !== false
+            ) {
+                $providerCategoryIds[] = (int) ($categoryMeta['id'] ?? 0);
+                if (!empty($categoryMeta['parent_id'])) {
+                    $providerCategoryIds[] = (int) $categoryMeta['parent_id'];
+                }
+            }
+        }
+    }
 
     if (!empty($orderServiceIds)) {
         $servicePlaceholders = implode(',', array_fill(0, count($orderServiceIds), '?'));
@@ -2463,6 +2735,33 @@ if ($action === 'view' && $id) {
             WHERE p.status = 'approved' AND p.is_available = 1
             ORDER BY p.rating DESC
         ");
+    }
+
+    if (!empty($orderAssignedProviderIds)) {
+        $availableProviderIds = [];
+        foreach ($availableProviders as $availableProvider) {
+            $providerId = (int) ($availableProvider['id'] ?? 0);
+            if ($providerId > 0) {
+                $availableProviderIds[$providerId] = true;
+            }
+        }
+
+        $missingAssignedProviderIds = array_values(array_filter(
+            $orderAssignedProviderIds,
+            static fn($providerId) => empty($availableProviderIds[(int) $providerId])
+        ));
+
+        if (!empty($missingAssignedProviderIds)) {
+            $missingPlaceholders = implode(',', array_fill(0, count($missingAssignedProviderIds), '?'));
+            $missingProviders = db()->fetchAll(
+                "SELECT p.*
+                 FROM providers p
+                 WHERE p.id IN ($missingPlaceholders)
+                 ORDER BY p.rating DESC",
+                $missingAssignedProviderIds
+            );
+            $availableProviders = array_merge($missingProviders, $availableProviders);
+        }
     }
 
     $availableProviders = decorateProvidersWithDistance(
@@ -2669,7 +2968,12 @@ include '../includes/header.php';
                                 }
                                 $displayCategoryIcon = $specialOverride['icon'] ?? '';
                                 if ($displayCategoryIcon === '' || $displayCategoryIcon === null) {
-                                    $displayCategoryIcon = $order['category_icon'] ?? '';
+                                    $displayCategoryIcon = serviceCategoryPrimaryMediaForApi(
+                                        $order['category_icon'] ?? '',
+                                        $order['category_image'] ?? '',
+                                        $displayCategoryName,
+                                        ''
+                                    );
                                 }
                             ?>
                             <span style="display: inline-flex; align-items: center; gap: 5px; margin-bottom: 6px;">
@@ -2905,7 +3209,12 @@ include '../includes/header.php';
                         }
                         $detailCategoryIcon = $detailOverride['icon'] ?? '';
                         if ($detailCategoryIcon === '' || $detailCategoryIcon === null) {
-                            $detailCategoryIcon = $order['category_icon'] ?? '';
+                            $detailCategoryIcon = serviceCategoryPrimaryMediaForApi(
+                                $order['category_icon'] ?? '',
+                                $order['category_image'] ?? '',
+                                $detailCategoryName,
+                                ''
+                            );
                         }
                     ?>
                     <div style="width: 60px; height: 60px; background: white; border-radius: 12px; display: flex; align-items: center; justify-content: center; font-size: 30px; box-shadow: 0 2px 10px rgba(0,0,0,0.1);">
@@ -2972,10 +3281,81 @@ include '../includes/header.php';
                         $problemDescription = trim((string) $order['problem_description']);
                     }
 
-                    $problemType = trim((string) ($problemDetails['type'] ?? ''));
-                    if ($problemType === '') {
-                        $problemType = 'غير محدد';
+                    $problemTypes = [];
+                    $appendProblemTypes = static function ($value) use (&$problemTypes, &$appendProblemTypes) {
+                        if ($value instanceof stdClass) {
+                            $value = (array) $value;
+                        }
+
+                        if (is_string($value)) {
+                            $trimmed = trim($value);
+                            if ($trimmed === '') {
+                                return;
+                            }
+                            $decoded = json_decode($trimmed, true);
+                            if (json_last_error() === JSON_ERROR_NONE && is_array($decoded)) {
+                                $appendProblemTypes($decoded);
+                                return;
+                            }
+                            if (!in_array($trimmed, $problemTypes, true)) {
+                                $problemTypes[] = $trimmed;
+                            }
+                            return;
+                        }
+
+                        if (!is_array($value)) {
+                            return;
+                        }
+
+                        foreach ($value as $item) {
+                            if ($item instanceof stdClass) {
+                                $item = (array) $item;
+                            }
+                            if (is_array($item)) {
+                                $nestedItem = $item;
+                                $item = $item['title_ar']
+                                    ?? $item['name_ar']
+                                    ?? $item['title']
+                                    ?? $item['name']
+                                    ?? $item['type']
+                                    ?? $item['title_en']
+                                    ?? $item['name_en']
+                                    ?? '';
+                                if ($item === '') {
+                                    $appendProblemTypes($nestedItem);
+                                    continue;
+                                }
+                            }
+                            $label = trim((string) $item);
+                            if ($label !== '' && !in_array($label, $problemTypes, true)) {
+                                $problemTypes[] = $label;
+                            }
+                        }
+                    };
+                    $appendProblemTypes($problemDetails['problem_type_labels'] ?? []);
+                    $appendProblemTypes($problemDetails['problem_types'] ?? []);
+                    $appendProblemTypes($problemDetails['types'] ?? []);
+                    $appendProblemTypes($problemDetails['problem_type_titles'] ?? []);
+                    $appendProblemTypes($problemDetails['selected_problem_types'] ?? []);
+                    $appendProblemTypes(fetchProblemTypeLabelsByIdsForAdmin(
+                        normalizeProblemTypeIdsForAdmin($problemDetails, $order['type_option_id'] ?? null)
+                    ));
+                    if (empty($problemTypes)) {
+                        $appendProblemTypes($problemDetails['type'] ?? '');
                     }
+                    $problemType = !empty($problemTypes) ? implode('، ', $problemTypes) : 'غير محدد';
+                    $inspectionPolicy = [];
+                    if (isset($problemDetails['inspection_policy'])) {
+                        $rawInspectionPolicy = $problemDetails['inspection_policy'];
+                        if ($rawInspectionPolicy instanceof stdClass) {
+                            $rawInspectionPolicy = (array) $rawInspectionPolicy;
+                        }
+                        if (is_array($rawInspectionPolicy)) {
+                            $inspectionPolicy = $rawInspectionPolicy;
+                        }
+                    }
+                    $inspectionPolicyDetails = trim((string) ($inspectionPolicy['details_ar'] ?? ''));
+                    $inspectionPolicySource = trim((string) ($inspectionPolicy['source_name'] ?? ''));
 
                     $serviceTypeNames = [];
                     $customServiceNames = [];
@@ -3004,13 +3384,25 @@ include '../includes/header.php';
                     <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 15px;">
                         <div>
                             <strong>نوع المشكلة:</strong>
-                            <p><?php echo $problemType; ?></p>
+                            <p><?php echo htmlspecialchars($problemType, ENT_QUOTES, 'UTF-8'); ?></p>
                         </div>
                         <div>
                             <strong>نوع الخدمة:</strong>
                             <p><?php echo !empty($serviceTypeNames) ? implode('، ', $serviceTypeNames) : 'غير محدد'; ?></p>
                         </div>
                     </div>
+
+                    <?php if ($inspectionPolicyDetails !== '' || $inspectionPolicySource !== ''): ?>
+                    <div style="margin-bottom: 15px; padding: 12px; background: #f8fafc; border-radius: 10px;">
+                        <strong>تفاصيل المعاينة:</strong>
+                        <?php if ($inspectionPolicyDetails !== ''): ?>
+                            <p style="margin: 6px 0 0;"><?php echo htmlspecialchars($inspectionPolicyDetails, ENT_QUOTES, 'UTF-8'); ?></p>
+                        <?php endif; ?>
+                        <?php if ($inspectionPolicySource !== ''): ?>
+                            <p style="margin: 6px 0 0; color: #64748b; font-size: 13px;">تم احتسابها حسب: <?php echo htmlspecialchars($inspectionPolicySource, ENT_QUOTES, 'UTF-8'); ?></p>
+                        <?php endif; ?>
+                    </div>
+                    <?php endif; ?>
 
                     <?php if (!empty($customServiceNames)): ?>
                     <div style="margin-bottom: 15px;">
@@ -3361,7 +3753,8 @@ include '../includes/header.php';
                         <?php endif; ?>
                     </div>
                 </div>
-            <?php elseif ($specialOrderModule === 'furniture'): ?>
+            <?php else: ?>
+                <?php if ($specialOrderModule === 'furniture'): ?>
                 <div class="card animate-slideUp" style="margin-bottom: 25px;">
                     <div class="card-header">
                         <h3 class="card-title">
@@ -3371,7 +3764,7 @@ include '../includes/header.php';
                     </div>
                     <div class="card-body">
                         <p style="color: #6b7280; margin-bottom: 10px;">
-                            إدارة طلبات نقل العفش تتم من صفحة الطلبات المخصصة.
+                            بيانات نقل العفش التفصيلية تتم من الصفحة المخصصة، وإسناد مقدم الخدمة يتم من هنا حتى يظهر الطلب في تطبيق مقدم الخدمة.
                         </p>
                         <?php if (!empty($specialOrderLinkedRequestUrl)): ?>
                             <a href="<?php echo htmlspecialchars($specialOrderLinkedRequestUrl, ENT_QUOTES, 'UTF-8'); ?>" class="btn btn-outline btn-sm">
@@ -3380,8 +3773,8 @@ include '../includes/header.php';
                         <?php endif; ?>
                     </div>
                 </div>
-            <?php else: ?>
-                <div class="card animate-slideUp" style="margin-bottom: 25px;">
+                <?php endif; ?>
+                <div id="provider-assignment" class="card animate-slideUp" style="margin-bottom: 25px;">
                     <div class="card-header">
                         <h3 class="card-title">
                             <i class="fas fa-user-plus" style="color: var(--secondary-color);"></i>
@@ -3866,8 +4259,8 @@ include '../includes/header.php';
             zoom: 13,
             zoomControl: true,
         });
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '&copy; OpenStreetMap contributors',
+        L.tileLayer('../ajax/map_tiles.php?provider=auto&z={z}&x={x}&y={y}', {
+            attribution: '&copy; OpenStreetMap contributors &copy; CARTO &copy; Esri',
             maxZoom: 19,
         }).addTo(map);
 

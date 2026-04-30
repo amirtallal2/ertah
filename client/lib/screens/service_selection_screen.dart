@@ -88,6 +88,11 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
     return int.tryParse(value?.toString() ?? '') ?? 0;
   }
 
+  double _toDouble(dynamic value) {
+    if (value is num) return value.toDouble();
+    return double.tryParse(value?.toString() ?? '') ?? 0.0;
+  }
+
   List<Map<String, dynamic>> _asMapList(dynamic raw) {
     if (raw is! List) return <Map<String, dynamic>>[];
     return raw
@@ -138,6 +143,13 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
     final radius = borderRadius ?? BorderRadius.circular(16);
     final mediaUrl = _resolveItemMediaUrl(item, preferImage: preferImage);
     final symbol = _fallbackSymbol(item, fallback);
+    final fallbackWidget = symbol.isNotEmpty
+        ? Text(symbol, style: const TextStyle(fontSize: 20))
+        : const Icon(
+            Icons.category_outlined,
+            color: AppColors.primary,
+            size: 24,
+          );
 
     return Container(
       width: size,
@@ -147,7 +159,7 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
         borderRadius: radius,
       ),
       child: mediaUrl == null
-          ? Center(child: Text(symbol, style: const TextStyle(fontSize: 20)))
+          ? Center(child: fallbackWidget)
           : ClipRRect(
               borderRadius: radius,
               child: CachedNetworkImage(
@@ -162,9 +174,7 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
                     child: CircularProgressIndicator(strokeWidth: 2),
                   ),
                 ),
-                errorWidget: (_, __, ___) => Center(
-                  child: Text(symbol, style: const TextStyle(fontSize: 20)),
-                ),
+                errorWidget: (_, __, ___) => Center(child: fallbackWidget),
               ),
             ),
     );
@@ -267,6 +277,12 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
       icon: category['icon']?.toString(),
       image: category['image']?.toString(),
       specialModule: category['special_module']?.toString(),
+      inspectionPricingMode: (category['inspection_pricing_mode'] ?? 'free')
+          .toString(),
+      inspectionFee: _toDouble(category['inspection_fee']),
+      inspectionDetailsAr: category['inspection_details_ar']?.toString(),
+      inspectionDetailsEn: category['inspection_details_en']?.toString(),
+      inspectionDetailsUr: category['inspection_details_ur']?.toString(),
       createdAt: DateTime.now(),
     );
   }
@@ -315,6 +331,16 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
     return _specialModule == 'furniture_moving' ||
         _specialModule == 'container_rental';
   }
+
+  String get _resolvedSpecialModule =>
+      (_specialModule ?? widget.service.specialModule ?? '')
+          .toString()
+          .trim()
+          .toLowerCase();
+
+  bool get _hideFeaturedProducts =>
+      _resolvedSpecialModule == 'furniture_moving' ||
+      _resolvedSpecialModule == 'container_rental';
 
   bool get _hasOtherCustomService {
     return _otherServiceNameController.text.trim().isNotEmpty &&
@@ -377,6 +403,22 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
     return double.tryParse('${spare['price'] ?? 0}') ?? 0;
   }
 
+  String _inspectionSummary(Map<String, dynamic> item) {
+    final mode = (item['inspection_pricing_mode'] ?? 'inherit')
+        .toString()
+        .toLowerCase()
+        .trim();
+    if (mode == 'inherit' || mode.isEmpty) return '';
+    if (mode == 'paid') {
+      final fee = _toDouble(item['inspection_fee']);
+      if (fee <= 0) return '';
+      return context
+          .tr('service_selection_paid_inspection')
+          .replaceAll('{amount}', fee.toStringAsFixed(2));
+    }
+    return context.tr('service_selection_free_inspection');
+  }
+
   bool _spareInStock(Map<String, dynamic> spare) {
     final inStock = spare['inStock'];
     if (inStock is bool) {
@@ -386,6 +428,10 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
   }
 
   Widget _buildSparePartsSection() {
+    if (_hideFeaturedProducts) {
+      return const SizedBox.shrink();
+    }
+
     if (_isLoadingSpareParts) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -815,7 +861,7 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
                   leading: _buildItemThumbnail(
                     category,
                     size: 58,
-                    fallback: '📁',
+                    fallback: '',
                     preferImage: true,
                     borderRadius: BorderRadius.circular(16),
                   ),
@@ -858,107 +904,116 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
           final description = _localizedDescription(service);
 
           return AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                margin: const EdgeInsets.only(bottom: 10),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(14),
-                  border: selected
-                      ? Border.all(color: AppColors.primary, width: 1.8)
-                      : null,
-                  boxShadow: AppShadows.sm,
-                ),
-                child: InkWell(
-                  borderRadius: BorderRadius.circular(14),
-                  onTap: () => _toggleService(serviceId),
-                  child: Padding(
-                    padding: const EdgeInsets.all(14),
-                    child: Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+            duration: const Duration(milliseconds: 200),
+            margin: const EdgeInsets.only(bottom: 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(14),
+              border: selected
+                  ? Border.all(color: AppColors.primary, width: 1.8)
+                  : null,
+              boxShadow: AppShadows.sm,
+            ),
+            child: InkWell(
+              borderRadius: BorderRadius.circular(14),
+              onTap: () => _toggleService(serviceId),
+              child: Padding(
+                padding: const EdgeInsets.all(14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Stack(
                       children: [
-                        Stack(
-                          children: [
-                            _buildItemThumbnail(
-                              service,
-                              size: 66,
-                              fallback: '🔧',
-                              preferImage: true,
-                              borderRadius: BorderRadius.circular(14),
-                            ),
-                            PositionedDirectional(
-                              end: 4,
-                              top: 4,
-                              child: Container(
-                                width: 24,
-                                height: 24,
-                                decoration: BoxDecoration(
-                                  color: selected
-                                      ? AppColors.primary
-                                      : Colors.white,
-                                  borderRadius: BorderRadius.circular(8),
-                                  border: Border.all(
-                                    color: selected
-                                        ? AppColors.primary
-                                        : AppColors.gray300,
-                                  ),
-                                  boxShadow: AppShadows.sm,
-                                ),
-                                child: Icon(
-                                  selected ? Icons.check : Icons.add,
-                                  size: 16,
-                                  color: selected
-                                      ? Colors.white
-                                      : AppColors.primary,
-                                ),
-                              ),
-                            ),
-                          ],
+                        _buildItemThumbnail(
+                          service,
+                          size: 66,
+                          fallback: '',
+                          preferImage: true,
+                          borderRadius: BorderRadius.circular(14),
                         ),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                _localizedName(service),
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.gray800,
-                                ),
+                        PositionedDirectional(
+                          end: 4,
+                          top: 4,
+                          child: Container(
+                            width: 24,
+                            height: 24,
+                            decoration: BoxDecoration(
+                              color: selected
+                                  ? AppColors.primary
+                                  : Colors.white,
+                              borderRadius: BorderRadius.circular(8),
+                              border: Border.all(
+                                color: selected
+                                    ? AppColors.primary
+                                    : AppColors.gray300,
                               ),
-                              if (description.isNotEmpty) ...[
-                                const SizedBox(height: 4),
-                                Text(
-                                  description,
-                                  style: const TextStyle(
-                                    fontSize: 12,
-                                    color: AppColors.gray500,
-                                  ),
-                                  maxLines: 2,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ],
-                              const SizedBox(height: 10),
-                              SaudiRiyalText(
-                                text: '${service['price'] ?? 0}',
-                                style: const TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.bold,
-                                  color: AppColors.primary,
-                                ),
-                                iconSize: 15,
-                              ),
-                            ],
+                              boxShadow: AppShadows.sm,
+                            ),
+                            child: Icon(
+                              selected ? Icons.check : Icons.add,
+                              size: 16,
+                              color: selected
+                                  ? Colors.white
+                                  : AppColors.primary,
+                            ),
                           ),
                         ),
                       ],
                     ),
-                  ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _localizedName(service),
+                            style: const TextStyle(
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.gray800,
+                            ),
+                          ),
+                          if (description.isNotEmpty) ...[
+                            const SizedBox(height: 4),
+                            Text(
+                              description,
+                              style: const TextStyle(
+                                fontSize: 12,
+                                color: AppColors.gray500,
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                          const SizedBox(height: 10),
+                          SaudiRiyalText(
+                            text:
+                                '${context.tr('starts_from')} ${service['price'] ?? 0}',
+                            style: const TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.bold,
+                              color: AppColors.primary,
+                            ),
+                            iconSize: 15,
+                          ),
+                          if (_inspectionSummary(service).isNotEmpty) ...[
+                            const SizedBox(height: 6),
+                            Text(
+                              _inspectionSummary(service),
+                              style: TextStyle(
+                                color: AppColors.gray600,
+                                fontSize: 11,
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
-              )
-              .animate()
-              .fadeIn(delay: (index * 45).ms)
-              .slideX(begin: 0.08, end: 0);
+              ),
+            ),
+          ).animate().fadeIn(delay: (index * 45).ms).slideX(begin: 0.08, end: 0);
         }),
         const SizedBox(height: 8),
         OutlinedButton.icon(
@@ -1041,8 +1096,9 @@ class _ServiceSelectionScreenState extends State<ServiceSelectionScreen> {
     final hasAnyItems =
         _subCategories.isNotEmpty ||
         _subServices.isNotEmpty ||
-        _visibleSpareParts.isNotEmpty ||
-        _isLoadingSpareParts;
+        (!_hideFeaturedProducts &&
+            (_visibleSpareParts.isNotEmpty || _isLoadingSpareParts)) ||
+        _canContinueWithoutSelection;
     final showBottomAction =
         _selectedServices.isNotEmpty ||
         _canContinueWithoutSelection ||

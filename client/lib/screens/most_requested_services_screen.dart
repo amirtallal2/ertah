@@ -140,6 +140,12 @@ class _MostRequestedServicesScreenState
           .toString(),
       image: (item['category_image'] ?? item['image'] ?? '').toString(),
       specialModule: item['category_special_module']?.toString(),
+      inspectionPricingMode:
+          (item['category_inspection_pricing_mode'] ?? 'free').toString(),
+      inspectionFee: _toDouble(item['category_inspection_fee']),
+      inspectionDetailsAr: item['category_inspection_details_ar']?.toString(),
+      inspectionDetailsEn: item['category_inspection_details_en']?.toString(),
+      inspectionDetailsUr: item['category_inspection_details_ur']?.toString(),
       createdAt: DateTime.now(),
     );
 
@@ -150,6 +156,9 @@ class _MostRequestedServicesScreenState
             ? ServiceRequestScreen(
                 service: category,
                 subServices: <int>[serviceId],
+                selectedServices: <Map<String, dynamic>>[
+                  Map<String, dynamic>.from(item),
+                ],
               )
             : ServiceSelectionScreen(service: category),
       ),
@@ -312,7 +321,7 @@ class _MostRequestedServicesScreenState
                                   children: [
                                     SaudiRiyalText(
                                       text:
-                                          '${context.tr('from')} ${_formatPrice(item['price'])}',
+                                          '${context.tr('starts_from')} ${_formatPrice(item['price'])}',
                                       style: const TextStyle(
                                         color: Color(0xFF7466ED),
                                         fontWeight: FontWeight.bold,

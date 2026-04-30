@@ -31,6 +31,27 @@ class ProvidersService {
     return '$ar|$en';
   }
 
+  bool _isContainerSpecialty(Map<String, dynamic> item) {
+    final id = int.tryParse('${item['id']}') ?? 0;
+    final module = (item['special_module'] ?? '').toString().toLowerCase();
+    final label = _normalizedLabel(item);
+    return id == -102 ||
+        module.contains('container') ||
+        label.contains('container') ||
+        label.contains('حاويات');
+  }
+
+  bool _isOtherServiceCategory(Map<String, dynamic> item) {
+    final label = _normalizedLabel(item)
+        .replaceAll('أ', 'ا')
+        .replaceAll('إ', 'ا')
+        .replaceAll('آ', 'ا')
+        .replaceAll('ى', 'ي');
+    return (label.contains('خدم') && label.contains('اخر')) ||
+        label.contains('other service') ||
+        label.contains('other services');
+  }
+
   List<Map<String, dynamic>> _extractCategories(dynamic payload) {
     if (payload is List) {
       return _asMapList(payload);
@@ -66,6 +87,8 @@ class ProvidersService {
     if (raw.isEmpty) return raw;
 
     final items = raw
+        .where((item) => !_isContainerSpecialty(item))
+        .where((item) => !_isOtherServiceCategory(item))
         .where((item) => (int.tryParse('${item['id']}') ?? 0) != 0)
         .map((item) {
           final normalized = Map<String, dynamic>.from(item);

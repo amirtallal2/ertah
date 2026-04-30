@@ -548,8 +548,8 @@ function getHomeData()
                     'name_ar' => $row['name_ar'],
                     'name_en' => $row['name_en'],
                     'name_ur' => $row['name_ur'] ?? (($row['name_en'] ?? '') !== '' ? $row['name_en'] : $row['name_ar']),
-                    'icon' => isset($row['icon']) ? imageUrl($row['icon']) : null,
-                    'image' => isset($row['image']) ? imageUrl($row['image']) : null,
+                    'icon' => serviceCategoryIconForApi($row['icon'] ?? null, $row['name_ar'] ?? '', $row['name_en'] ?? ''),
+                    'image' => serviceCategoryImageForApi($row['image'] ?? null),
                     'special_module' => null,
                     'warranty_days' => isset($row['warranty_days']) ? (int) $row['warranty_days'] : 14,
                     'sort_order' => isset($row['sort_order']) ? (int) $row['sort_order'] : 0,
@@ -591,8 +591,8 @@ function getHomeData()
                             'name_ar' => $subRow['name_ar'],
                             'name_en' => $subRow['name_en'],
                             'name_ur' => $subRow['name_ur'] ?? (($subRow['name_en'] ?? '') !== '' ? $subRow['name_en'] : $subRow['name_ar']),
-                            'icon' => isset($subRow['icon']) ? imageUrl($subRow['icon']) : null,
-                            'image' => isset($subRow['image']) ? imageUrl($subRow['image']) : null,
+                            'icon' => serviceCategoryIconForApi($subRow['icon'] ?? null, $subRow['name_ar'] ?? '', $subRow['name_en'] ?? ''),
+                            'image' => serviceCategoryImageForApi($subRow['image'] ?? null),
                             'special_module' => null,
                             'warranty_days' => isset($subRow['warranty_days']) ? (int) $subRow['warranty_days'] : 14,
                             'sort_order' => isset($subRow['sort_order']) ? (int) $subRow['sort_order'] : 0,
@@ -609,8 +609,7 @@ function getHomeData()
             }
         }
 
-        $data['categories'] = array_merge($data['categories'], $specialCategories);
-        usort($data['categories'], fn($a, $b) => ((int) ($a['sort_order'] ?? 0)) <=> ((int) ($b['sort_order'] ?? 0)));
+        $data['categories'] = deduplicateServiceCategoriesForApi(array_merge($data['categories'], $specialCategories));
         if (count($data['categories']) > $homeCategoriesLimit) {
             $data['categories'] = array_slice($data['categories'], 0, $homeCategoriesLimit);
         }
