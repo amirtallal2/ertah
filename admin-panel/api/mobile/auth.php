@@ -30,6 +30,7 @@ define('OTP_LENGTH', 4);
 define('OTP_DELIVERY_CHANNELS_LIMIT', 4);
 define('FOURJAWALY_API_URL_DEFAULT', 'https://api-sms.4jawaly.com/api/v1/account/area/sms/v2/send');
 define('FOURJAWALY_API_URL', getenv('FOURJAWALY_API_URL') ?: FOURJAWALY_API_URL_DEFAULT);
+define('OTP_SMS_SENDER_ID_DEFAULT', 'Darfix');
 
 // Disable warnings/notices to ensure clean JSON
 error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING & ~E_DEPRECATED);
@@ -149,6 +150,18 @@ function resolveSmsAppName(array $settings): string
     ], 'Darfix');
 }
 
+function normalizeOtpSmsSenderId($value): string
+{
+    $senderId = trim((string) $value);
+    $compact = strtolower(preg_replace('/[\s_\-]+/', '', $senderId) ?? '');
+
+    if ($senderId === '' || in_array($compact, ['ertah', 'ertahapp', 'ertahsms'], true)) {
+        return OTP_SMS_SENDER_ID_DEFAULT;
+    }
+
+    return $senderId;
+}
+
 function resolveSmsConfig(array $settings): array
 {
     $apiUrl = firstNonEmptyValue([
@@ -168,11 +181,11 @@ function resolveSmsConfig(array $settings): array
         getenv('FOURJAWALY_API_SECRET') ?: '',
     ]);
 
-    $senderId = firstNonEmptyValue([
+    $senderId = normalizeOtpSmsSenderId(firstNonEmptyValue([
         $settings['sms_sender_id'] ?? '',
         $settings['whatsapp_sender'] ?? '',
         getenv('FOURJAWALY_SENDER_ID') ?: '',
-    ]);
+    ], OTP_SMS_SENDER_ID_DEFAULT));
 
     return [
         'api_url' => $apiUrl,

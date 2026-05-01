@@ -18,6 +18,18 @@ ensureNotificationSchema();
 $pageTitle = 'إعدادات الإشعارات';
 $pageSubtitle = 'إدارة إعدادات البريد الإلكتروني والواتساب ومستلمي الإشعارات';
 
+function normalizeNotificationSenderIdValue($value, $fallback = 'Darfix')
+{
+    $senderId = trim((string) $value);
+    $compact = strtolower(preg_replace('/[\s_\-]+/', '', $senderId) ?? '');
+
+    if ($senderId === '' || in_array($compact, ['ertah', 'ertahapp', 'ertahsms'], true)) {
+        return $fallback;
+    }
+
+    return $senderId;
+}
+
 // Handle form submissions
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['form_action'] ?? '';
@@ -47,7 +59,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($whatsappSecret !== '') {
             setNotifSetting('whatsapp_api_secret', $whatsappSecret);
         }
-        setNotifSetting('whatsapp_sender', trim($_POST['whatsapp_sender'] ?? ''));
+        setNotifSetting('whatsapp_sender', normalizeNotificationSenderIdValue($_POST['whatsapp_sender'] ?? ''));
         setNotifSetting('whatsapp_gateway', trim($_POST['whatsapp_gateway'] ?? '4jawaly'));
         setFlashMessage('success', 'تم حفظ إعدادات الواتساب بنجاح');
         redirect('notification-settings.php');
@@ -152,7 +164,7 @@ $whatsapp = [
     'enabled'  => getNotifSetting('whatsapp_enabled', '0'),
     'api_key'  => getNotifSetting('whatsapp_api_key'),
     'secret_set' => getNotifSetting('whatsapp_api_secret') !== '',
-    'sender'   => getNotifSetting('whatsapp_sender'),
+    'sender'   => normalizeNotificationSenderIdValue(getNotifSetting('whatsapp_sender')),
     'gateway'  => getNotifSetting('whatsapp_gateway', '4jawaly'),
 ];
 

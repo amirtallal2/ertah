@@ -391,6 +391,7 @@ const DARFIX_AI_DEFAULT_ENDPOINT = 'https://api.us-west-2.modal.direct/v1/chat/c
 const DARFIX_AI_DEFAULT_MODEL = 'zai-org/GLM-5-FP8';
 const DARFIX_AI_DEFAULT_API_KEY = 'modalresearch_yjGu-_89u70CljD8gI2xuUP7gDQIa-Y63uojEtC9Tso';
 const DARFIX_AI_DEFAULT_MAX_TOKENS = 500;
+const DARFIX_SMS_SENDER_ID = 'Darfix';
 
 function normalizeArabicDigitsToEnglish($value)
 {
@@ -428,6 +429,18 @@ function sanitizeFixedOtp($value, $fallback = '1234')
     }
 
     return $digits;
+}
+
+function normalizeSmsSenderIdValue($value, $fallback = DARFIX_SMS_SENDER_ID)
+{
+    $senderId = trim((string) $value);
+    $compact = strtolower(preg_replace('/[\s_\-]+/', '', $senderId) ?? '');
+
+    if ($senderId === '' || in_array($compact, ['ertah', 'ertahapp', 'ertahsms'], true)) {
+        return $fallback;
+    }
+
+    return $senderId;
 }
 
 ensureContentPagesTable();
@@ -534,7 +547,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (isset($settings['sms_sender_id'])) {
-        $settings['sms_sender_id'] = trim((string) $settings['sms_sender_id']);
+        $settings['sms_sender_id'] = normalizeSmsSenderIdValue($settings['sms_sender_id']);
     }
 
     if (isset($settings['sms_api_url'])) {
@@ -1163,7 +1176,7 @@ $myFatoorahTokenMasked = maskSecretValue($effectiveMyFatoorahToken);
 $smsApiUrl = conf('sms_api_url', 'https://api-sms.4jawaly.com/api/v1/account/area/sms/v2/send');
 $smsApiKeyStored = trim((string) conf('sms_api_key', ''));
 $smsApiSecretStored = trim((string) conf('sms_api_secret', ''));
-$smsSenderIdStored = trim((string) conf('sms_sender_id', conf('whatsapp_sender', '')));
+$smsSenderIdStored = normalizeSmsSenderIdValue(conf('sms_sender_id', conf('whatsapp_sender', DARFIX_SMS_SENDER_ID)));
 $smsApiKeyFallback = trim((string) conf('whatsapp_api_key', ''));
 $smsApiSecretFallback = trim((string) conf('whatsapp_api_secret', ''));
 $smsApiKeyEffective = $smsApiKeyStored !== '' ? $smsApiKeyStored : $smsApiKeyFallback;
@@ -1310,7 +1323,7 @@ include '../includes/header.php';
                                     value="<?php echo htmlspecialchars($smsSenderIdStored, ENT_QUOTES, 'UTF-8'); ?>"
                                     dir="ltr"
                                     style="text-align: left;"
-                                    placeholder="مثال: ErtahApp">
+                                    placeholder="Darfix">
                                 <small class="text-muted">يجب أن يكون Sender ID مفعلاً ومعتمداً داخل حساب 4Jawaly.</small>
                             </div>
 
