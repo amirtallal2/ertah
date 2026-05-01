@@ -248,6 +248,78 @@ function specialEnsureContainerCategoryId(): ?int
     return $categoryId;
 }
 
+function specialFirstActiveServiceImageUrl(string $tableName): ?string
+{
+    $table = preg_replace('/[^a-zA-Z0-9_]/', '', $tableName);
+    if (!in_array($table, ['furniture_services', 'container_services'], true)) {
+        return null;
+    }
+
+    if (!specialServiceTableExists($table) || !specialServiceColumnExists($table, 'image')) {
+        return null;
+    }
+
+    $where = "image IS NOT NULL AND image != ''";
+    if (specialServiceColumnExists($table, 'is_active')) {
+        $where = 'is_active = 1 AND ' . $where;
+    }
+
+    $orderParts = [];
+    if (specialServiceColumnExists($table, 'sort_order')) {
+        $orderParts[] = 'sort_order ASC';
+    }
+    $orderParts[] = 'id ASC';
+
+    $row = db()->fetch(
+        "SELECT image FROM `{$table}` WHERE {$where} ORDER BY " . implode(', ', $orderParts) . ' LIMIT 1'
+    );
+    $image = trim((string) ($row['image'] ?? ''));
+    if ($image === '') {
+        return null;
+    }
+
+    return function_exists('imageUrl') ? imageUrl($image) : $image;
+}
+
+function specialServiceCategoryDisplayMeta(string $module): array
+{
+    $normalized = strtolower(trim($module));
+
+    if ($normalized === 'furniture' || $normalized === 'furniture_moving' || strpos($normalized, 'furniture') !== false) {
+        $image = specialFirstActiveServiceImageUrl('furniture_services');
+        return [
+            'id' => -101,
+            'name_ar' => 'نقل العفش',
+            'name_en' => 'Furniture Moving',
+            'name_ur' => 'فرنیچر کی منتقلی',
+            'icon' => $image ?: '🚚',
+            'fallback_icon' => '🚚',
+            'image' => $image,
+            'special_module' => 'furniture_moving',
+            'warranty_days' => 0,
+            'sort_order' => 9001,
+        ];
+    }
+
+    if ($normalized === 'container' || $normalized === 'container_rental' || strpos($normalized, 'container') !== false) {
+        $image = specialFirstActiveServiceImageUrl('container_services');
+        return [
+            'id' => -102,
+            'name_ar' => 'الحاويات',
+            'name_en' => 'Containers',
+            'name_ur' => 'کنٹینرز',
+            'icon' => $image ?: '📦',
+            'fallback_icon' => '📦',
+            'image' => $image,
+            'special_module' => 'container_rental',
+            'warranty_days' => 0,
+            'sort_order' => 9002,
+        ];
+    }
+
+    return [];
+}
+
 /**
  * إنشاء/تحديث جداول الخدمات الخاصة.
  */

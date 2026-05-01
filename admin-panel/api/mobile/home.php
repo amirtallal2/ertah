@@ -1064,18 +1064,18 @@ function getHomeSpecialCategories(): array
     if (specialServiceTableExists('furniture_services')) {
         $count = (int) db()->count('furniture_services', 'is_active = 1');
         if ($count > 0) {
-            $firstImage = db()->fetch("SELECT image FROM furniture_services WHERE is_active = 1 AND image IS NOT NULL AND image != '' ORDER BY sort_order ASC, id ASC LIMIT 1");
+            $meta = specialServiceCategoryDisplayMeta('furniture');
             $categories[] = [
-                'id' => -101,
+                'id' => $meta['id'] ?? -101,
                 'parent_id' => null,
-                'name_ar' => 'نقل العفش',
-                'name_en' => 'Furniture Moving',
-                'name_ur' => 'فرنیچر کی منتقلی',
-                'icon' => '🚚',
-                'image' => !empty($firstImage['image']) ? imageUrl($firstImage['image']) : null,
-                'special_module' => 'furniture_moving',
-                'warranty_days' => 0,
-                'sort_order' => 9001,
+                'name_ar' => $meta['name_ar'] ?? 'نقل العفش',
+                'name_en' => $meta['name_en'] ?? 'Furniture Moving',
+                'name_ur' => $meta['name_ur'] ?? 'فرنیچر کی منتقلی',
+                'icon' => $meta['icon'] ?? '🚚',
+                'image' => $meta['image'] ?? null,
+                'special_module' => $meta['special_module'] ?? 'furniture_moving',
+                'warranty_days' => $meta['warranty_days'] ?? 0,
+                'sort_order' => $meta['sort_order'] ?? 9001,
             ];
         }
     }
@@ -1083,18 +1083,18 @@ function getHomeSpecialCategories(): array
     if (specialServiceTableExists('container_services')) {
         $count = (int) db()->count('container_services', 'is_active = 1');
         if ($count > 0) {
-            $firstImage = db()->fetch("SELECT image FROM container_services WHERE is_active = 1 AND image IS NOT NULL AND image != '' ORDER BY sort_order ASC, id ASC LIMIT 1");
+            $meta = specialServiceCategoryDisplayMeta('container');
             $categories[] = [
-                'id' => -102,
+                'id' => $meta['id'] ?? -102,
                 'parent_id' => null,
-                'name_ar' => 'الحاويات',
-                'name_en' => 'Containers',
-                'name_ur' => 'کنٹینرز',
-                'icon' => '📦',
-                'image' => !empty($firstImage['image']) ? imageUrl($firstImage['image']) : null,
-                'special_module' => 'container_rental',
-                'warranty_days' => 0,
-                'sort_order' => 9002,
+                'name_ar' => $meta['name_ar'] ?? 'الحاويات',
+                'name_en' => $meta['name_en'] ?? 'Containers',
+                'name_ur' => $meta['name_ur'] ?? 'کنٹینرز',
+                'icon' => $meta['icon'] ?? '📦',
+                'image' => $meta['image'] ?? null,
+                'special_module' => $meta['special_module'] ?? 'container_rental',
+                'warranty_days' => $meta['warranty_days'] ?? 0,
+                'sort_order' => $meta['sort_order'] ?? 9002,
             ];
         }
     }

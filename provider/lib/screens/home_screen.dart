@@ -860,11 +860,17 @@ class _HomeScreenState extends State<HomeScreen>
       padding: const EdgeInsets.all(16),
       itemBuilder: (context, index) {
         final order = orders[index];
+        final orderTitle =
+            (order['display_service_name'] ?? order['category_name'] ?? '')
+                .toString()
+                .trim();
         return Card(
           margin: const EdgeInsets.only(bottom: 16),
           child: ListTile(
             title: Text(
-              order['category_name'] ?? context.tr('unknown_service'),
+              orderTitle.isNotEmpty
+                  ? orderTitle
+                  : context.tr('unknown_service'),
             ),
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,

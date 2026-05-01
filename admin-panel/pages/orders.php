@@ -7,6 +7,7 @@
 require_once '../init.php';
 requireLogin();
 require_once '../includes/provider_finance.php';
+require_once '../includes/special_services.php';
 
 $pageTitle = 'الطلبات';
 $pageSubtitle = 'إدارة طلبات الخدمات';
@@ -327,18 +328,17 @@ function detectSpecialOrderModuleForAdmin($problemDetailsRaw): string
 function getSpecialOrderDisplayOverride($problemDetailsRaw): array
 {
     $module = detectSpecialOrderModuleForAdmin($problemDetailsRaw);
-    if ($module === 'furniture') {
+    $meta = $module !== '' && function_exists('specialServiceCategoryDisplayMeta')
+        ? specialServiceCategoryDisplayMeta($module)
+        : [];
+
+    if (!empty($meta)) {
         return [
-            'name' => 'نقل العفش',
-            'icon' => '🚚',
+            'name' => $meta['name_ar'] ?? null,
+            'icon' => $meta['icon'] ?? ($meta['image'] ?? ($meta['fallback_icon'] ?? null)),
         ];
     }
-    if ($module === 'container') {
-        return [
-            'name' => 'الحاويات',
-            'icon' => '📦',
-        ];
-    }
+
     return [
         'name' => null,
         'icon' => null,

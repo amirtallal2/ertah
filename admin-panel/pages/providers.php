@@ -1359,7 +1359,17 @@ include '../includes/header.php';
                                                 <?php echo $order['user_name'] ?? 'غير معروف'; ?>
                                             </td>
                                             <td>
-                                                <?php echo $categoryDisplayMap[(int) ($order['category_id'] ?? 0)] ?? ($order['category_name'] ?? '-'); ?>
+                                                <?php
+                                                    $providerOrderCategoryName = $categoryDisplayMap[(int) ($order['category_id'] ?? 0)] ?? ($order['category_name'] ?? '-');
+                                                    $providerSpecialOrderModule = function_exists('specialDetectOrderModuleFromProblemDetails')
+                                                        ? specialDetectOrderModuleFromProblemDetails($order['problem_details'] ?? null)
+                                                        : '';
+                                                    if ($providerSpecialOrderModule !== '' && function_exists('specialServiceCategoryDisplayMeta')) {
+                                                        $providerSpecialOrderMeta = specialServiceCategoryDisplayMeta($providerSpecialOrderModule);
+                                                        $providerOrderCategoryName = $providerSpecialOrderMeta['name_ar'] ?? $providerOrderCategoryName;
+                                                    }
+                                                    echo htmlspecialchars((string) $providerOrderCategoryName, ENT_QUOTES, 'UTF-8');
+                                                ?>
                                             </td>
                                             <td>
                                                 <?php echo number_format($order['total_amount'], 2); ?> ⃁

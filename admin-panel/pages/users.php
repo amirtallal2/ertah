@@ -840,7 +840,17 @@ include '../includes/header.php';
                                                     <?php echo $order['order_number']; ?>
                                                 </strong></td>
                                             <td>
-                                                <?php echo $categoryDisplayMap[(int) ($order['category_id'] ?? 0)] ?? ($order['category_name'] ?? '-'); ?>
+                                                <?php
+                                                    $orderCategoryName = $categoryDisplayMap[(int) ($order['category_id'] ?? 0)] ?? ($order['category_name'] ?? '-');
+                                                    $specialOrderModule = function_exists('specialDetectOrderModuleFromProblemDetails')
+                                                        ? specialDetectOrderModuleFromProblemDetails($order['problem_details'] ?? null)
+                                                        : '';
+                                                    if ($specialOrderModule !== '' && function_exists('specialServiceCategoryDisplayMeta')) {
+                                                        $specialOrderMeta = specialServiceCategoryDisplayMeta($specialOrderModule);
+                                                        $orderCategoryName = $specialOrderMeta['name_ar'] ?? $orderCategoryName;
+                                                    }
+                                                    echo htmlspecialchars((string) $orderCategoryName, ENT_QUOTES, 'UTF-8');
+                                                ?>
                                             </td>
                                             <td>
                                                 <?php echo number_format($order['total_amount'], 2); ?> ⃁

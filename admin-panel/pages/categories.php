@@ -7,6 +7,7 @@
 require_once '../init.php';
 requireLogin();
 require_once '../includes/inspection_pricing.php';
+require_once '../includes/special_services.php';
 
 $pageTitle = 'فئات الخدمات';
 $pageSubtitle = 'إدارة الأقسام الرئيسية والفرعية';
@@ -332,7 +333,18 @@ include '../includes/header.php';
                         <td><?php echo $cat['parent_name_ar'] ?: '-'; ?></td>
                         <td>
                             <?php
-                                $catIcon = serviceCategoryIconForApi($cat['icon'] ?? '', $cat['name_ar'] ?? '', $cat['name_en'] ?? '');
+                                $catSpecialMeta = [];
+                                if (!$isSubCategory && isContainerServiceCategoryLabel($cat['name_ar'] ?? '', $cat['name_en'] ?? '')) {
+                                    $catSpecialMeta = specialServiceCategoryDisplayMeta('container');
+                                } elseif (!$isSubCategory && isFurnitureServiceCategoryLabel($cat['name_ar'] ?? '', $cat['name_en'] ?? '')) {
+                                    $catSpecialMeta = specialServiceCategoryDisplayMeta('furniture');
+                                }
+                                $catIcon = !empty($catSpecialMeta)
+                                    ? ($catSpecialMeta['icon'] ?? '')
+                                    : serviceCategoryIconForApi($cat['icon'] ?? '', $cat['name_ar'] ?? '', $cat['name_en'] ?? '');
+                                $catImage = !empty($catSpecialMeta)
+                                    ? ($catSpecialMeta['image'] ?? null)
+                                    : serviceCategoryImageForApi($cat['image'] ?? null);
                             ?>
                             <?php if ($catIcon && mediaValueLooksLikeFile($catIcon)): ?>
                                 <img src="<?php echo htmlspecialchars($catIcon, ENT_QUOTES, 'UTF-8'); ?>" alt="" style="width: 30px; height: 30px; object-fit: contain;">
@@ -343,8 +355,8 @@ include '../includes/header.php';
                             <?php endif; ?>
                         </td>
                         <td>
-                            <?php if ($cat['image']): ?>
-                            <img src="<?php echo imageUrl($cat['image']); ?>" alt="" class="avatar avatar-sm">
+                            <?php if ($catImage): ?>
+                            <img src="<?php echo htmlspecialchars($catImage, ENT_QUOTES, 'UTF-8'); ?>" alt="" class="avatar avatar-sm">
                             <?php else: ?>
                             -
                             <?php endif; ?>
@@ -549,7 +561,18 @@ include '../includes/header.php';
                 <div class="form-group">
                     <label class="form-label">الأيقونة (صورة)</label>
                     <?php
-                        $editCategoryIcon = serviceCategoryIconForApi($category['icon'] ?? '', $category['name_ar'] ?? '', $category['name_en'] ?? '');
+                        $editCategorySpecialMeta = [];
+                        if (empty($category['parent_id']) && isContainerServiceCategoryLabel($category['name_ar'] ?? '', $category['name_en'] ?? '')) {
+                            $editCategorySpecialMeta = specialServiceCategoryDisplayMeta('container');
+                        } elseif (empty($category['parent_id']) && isFurnitureServiceCategoryLabel($category['name_ar'] ?? '', $category['name_en'] ?? '')) {
+                            $editCategorySpecialMeta = specialServiceCategoryDisplayMeta('furniture');
+                        }
+                        $editCategoryIcon = !empty($editCategorySpecialMeta)
+                            ? ($editCategorySpecialMeta['icon'] ?? '')
+                            : serviceCategoryIconForApi($category['icon'] ?? '', $category['name_ar'] ?? '', $category['name_en'] ?? '');
+                        $editCategoryImage = !empty($editCategorySpecialMeta)
+                            ? ($editCategorySpecialMeta['image'] ?? null)
+                            : serviceCategoryImageForApi($category['image'] ?? null);
                     ?>
                     <?php if ($editCategoryIcon && mediaValueLooksLikeFile($editCategoryIcon)): ?>
                     <div style="margin-bottom: 10px;">
@@ -565,9 +588,9 @@ include '../includes/header.php';
 
                 <div class="form-group">
                     <label class="form-label">صورة الغلاف</label>
-                    <?php if ($category['image']): ?>
+                    <?php if ($editCategoryImage): ?>
                     <div style="margin-bottom: 10px;">
-                        <img src="<?php echo imageUrl($category['image']); ?>" alt="" style="height: 100px; border-radius: 10px;">
+                        <img src="<?php echo htmlspecialchars($editCategoryImage, ENT_QUOTES, 'UTF-8'); ?>" alt="" style="height: 100px; border-radius: 10px;">
                     </div>
                     <?php endif; ?>
                     <input type="file" name="image" class="form-control" accept="image/*">

@@ -5667,6 +5667,9 @@ function formatOrder($row, array $context = [])
         $categoryName,
         ''
     );
+    $categoryNameEn = null;
+    $categoryNameUr = null;
+    $orderSpecialModule = null;
     $problemDetailsArray = decodeOrderProblemDetailsPayload($row['problem_details'] ?? null);
     $problemTypeLabels = normalizeProblemTypeLabelsFromDetails($problemDetailsArray);
     $problemTypeIdLabels = fetchProblemTypeLabelsByIds(
@@ -5688,6 +5691,22 @@ function formatOrder($row, array $context = [])
         $problemDetailsArray['types'] = $problemTypeLabels;
         $problemDetailsArray['problem_type_titles'] = $problemTypeLabels;
         $problemDetailsArray['selected_problem_types'] = $problemTypeLabels;
+    }
+
+    $specialOrderModule = function_exists('specialDetectOrderModuleFromProblemDetails')
+        ? specialDetectOrderModuleFromProblemDetails($problemDetailsArray)
+        : '';
+    $specialCategoryMeta = $specialOrderModule !== '' && function_exists('specialServiceCategoryDisplayMeta')
+        ? specialServiceCategoryDisplayMeta($specialOrderModule)
+        : [];
+    if (!empty($specialCategoryMeta)) {
+        $categoryName = $specialCategoryMeta['name_ar'] ?? $categoryName;
+        $categoryNameEn = $specialCategoryMeta['name_en'] ?? null;
+        $categoryNameUr = $specialCategoryMeta['name_ur'] ?? null;
+        $categoryIcon = $specialCategoryMeta['icon'] ?? ($specialCategoryMeta['image'] ?? $categoryIcon);
+        $categoryImage = $specialCategoryMeta['image'] ?? $categoryImage;
+        $orderSpecialModule = $specialCategoryMeta['special_module'] ?? $specialOrderModule;
+        $problemDetailsArray['special_module'] = $orderSpecialModule;
     }
 
     $containerStore = fetchOrderContainerStoreAssignment($orderId, $problemDetailsArray);
@@ -5945,9 +5964,13 @@ function formatOrder($row, array $context = [])
         'scheduled_date' => $row['scheduled_date'] ?? null,
         'scheduled_time' => $row['scheduled_time'] ?? null,
         'category_name' => $categoryName,
+        'category_name_ar' => $categoryName,
+        'category_name_en' => $categoryNameEn,
+        'category_name_ur' => $categoryNameUr,
         'display_service_name' => $displayServiceName !== '' ? $displayServiceName : $categoryName,
         'category_icon' => $categoryIcon,
         'category_image' => $categoryImage,
+        'special_module' => $orderSpecialModule,
         'provider_name' => $providerName,
         'provider_avatar' => $providerAvatar,
         'provider_rating' => $providerRating,
