@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/foundation.dart';
 import 'package:onesignal_flutter/onesignal_flutter.dart';
 
@@ -17,7 +19,10 @@ class PushNotificationService {
   bool _initialized = false;
   bool _skipInitializationForMissingAppId = false;
   bool _missingAppIdLogged = false;
+  bool _subscriptionObserverAttached = false;
   int? _boundUserId;
+  int? _lastSyncedTokenUserId;
+  String? _lastSyncedDeviceToken;
   int? _pendingOrderId;
   VoidCallback? onOrderNotificationTap;
 
@@ -44,6 +49,7 @@ class PushNotificationService {
     try {
       OneSignal.initialize(appId);
       await OneSignal.Notifications.requestPermission(true);
+      await OneSignal.User.pushSubscription.optIn();
 
       OneSignal.Notifications.addClickListener((event) {
         final additionalData = event.notification.additionalData;
@@ -53,6 +59,15 @@ class PushNotificationService {
           onOrderNotificationTap?.call();
         }
       });
+
+      if (!_subscriptionObserverAttached) {
+        OneSignal.User.pushSubscription.addObserver((state) {
+          if (_boundUserId != null) {
+            unawaited(_syncDeviceTokenToBackend());
+          }
+        });
+        _subscriptionObserverAttached = true;
+      }
 
       _initialized = true;
     } catch (e) {
@@ -103,6 +118,8 @@ class PushNotificationService {
         } catch (_) {}
       }
       _boundUserId = null;
+      _lastSyncedTokenUserId = null;
+      _lastSyncedDeviceToken = null;
       return;
     }
 
@@ -185,10 +202,19 @@ class PushNotificationService {
         return;
       }
 
+      final normalizedToken = subscriptionId.trim();
+      if (_boundUserId != null &&
+          _lastSyncedTokenUserId == _boundUserId &&
+          _lastSyncedDeviceToken == normalizedToken) {
+        return;
+      }
+
       await _userService.updateDeviceToken(
-        deviceToken: subscriptionId.trim(),
+        deviceToken: normalizedToken,
         provider: 'onesignal',
       );
+      _lastSyncedTokenUserId = _boundUserId;
+      _lastSyncedDeviceToken = normalizedToken;
     } catch (e) {
       debugPrint('PushNotificationService token sync error: $e');
     }

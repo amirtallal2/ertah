@@ -4605,44 +4605,171 @@ function appSettingValue($key, $default = '')
     return $value === '' ? $default : $value;
 }
 
+function normalizeOneSignalRestApiKeyForOrders($raw)
+{
+    $value = trim((string) $raw);
+    if ($value === '') {
+        return '';
+    }
+
+    $value = trim($value, " \t\n\r\0\x0B\"'");
+    $value = preg_replace('/^authorization\s*:\s*/i', '', $value);
+    $value = preg_replace('/^(key|basic|bearer)\s+/i', '', trim((string) $value));
+    return trim((string) $value, " \t\n\r\0\x0B\"'");
+}
+
+function appendOneSignalCandidateForOrders(array &$candidates, $value, $source, $isRestKey = false)
+{
+    $value = trim((string) $value);
+    if ($isRestKey) {
+        $value = normalizeOneSignalRestApiKeyForOrders($value);
+    }
+    if ($value === '') {
+        return;
+    }
+
+    foreach ($candidates as $candidate) {
+        if (($candidate['value'] ?? '') === $value) {
+            return;
+        }
+    }
+
+    $candidates[] = [
+        'value' => $value,
+        'source' => (string) $source,
+    ];
+}
+
+function oneSignalAppIdCandidatesForOrders()
+{
+    $candidates = [];
+
+    appendOneSignalCandidateForOrders($candidates, appSettingValue('onesignal_app_id', ''), 'app_settings:onesignal_app_id');
+    appendOneSignalCandidateForOrders($candidates, appSettingValue('one_signal_app_id', ''), 'app_settings:one_signal_app_id');
+    appendOneSignalCandidateForOrders($candidates, getenv('ONESIGNAL_APP_ID') ?: '', 'ENV:ONESIGNAL_APP_ID');
+    appendOneSignalCandidateForOrders($candidates, getenv('ONE_SIGNAL_APP_ID') ?: '', 'ENV:ONE_SIGNAL_APP_ID');
+    appendOneSignalCandidateForOrders(
+        $candidates,
+        defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : '',
+        'config:ONESIGNAL_APP_ID'
+    );
+
+    return $candidates;
+}
+
+function oneSignalRestApiKeyCandidatesForOrders()
+{
+    $candidates = [];
+
+    appendOneSignalCandidateForOrders($candidates, appSettingValue('onesignal_rest_api_key', ''), 'app_settings:onesignal_rest_api_key', true);
+    appendOneSignalCandidateForOrders($candidates, appSettingValue('one_signal_rest_api_key', ''), 'app_settings:one_signal_rest_api_key', true);
+    appendOneSignalCandidateForOrders($candidates, getenv('ONESIGNAL_REST_API_KEY') ?: '', 'ENV:ONESIGNAL_REST_API_KEY', true);
+    appendOneSignalCandidateForOrders($candidates, getenv('ONE_SIGNAL_REST_API_KEY') ?: '', 'ENV:ONE_SIGNAL_REST_API_KEY', true);
+    appendOneSignalCandidateForOrders(
+        $candidates,
+        defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : '',
+        'config:ONESIGNAL_REST_API_KEY',
+        true
+    );
+
+    return $candidates;
+}
+
+function oneSignalCredentialCandidatesForOrders()
+{
+    $credentials = [];
+    $seen = [];
+
+    $appendCredential = static function ($appId, $apiKey, $source) use (&$credentials, &$seen) {
+        $appId = trim((string) $appId);
+        $apiKey = normalizeOneSignalRestApiKeyForOrders($apiKey);
+        if ($appId === '' || $apiKey === '') {
+            return;
+        }
+
+        $fingerprint = $appId . '|' . $apiKey;
+        if (isset($seen[$fingerprint])) {
+            return;
+        }
+        $seen[$fingerprint] = true;
+
+        $credentials[] = [
+            'app_id' => $appId,
+            'api_key' => $apiKey,
+            'source' => (string) $source,
+        ];
+    };
+
+    $dbAppId = appSettingValue('onesignal_app_id', '');
+    $dbLegacyAppId = appSettingValue('one_signal_app_id', '');
+    $dbRestKey = appSettingValue('onesignal_rest_api_key', '');
+    $dbLegacyRestKey = appSettingValue('one_signal_rest_api_key', '');
+    $envAppId = getenv('ONESIGNAL_APP_ID') ?: '';
+    $envLegacyAppId = getenv('ONE_SIGNAL_APP_ID') ?: '';
+    $envRestKey = getenv('ONESIGNAL_REST_API_KEY') ?: '';
+    $envLegacyRestKey = getenv('ONE_SIGNAL_REST_API_KEY') ?: '';
+    $configAppId = defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : '';
+    $configRestKey = defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : '';
+
+    $appendCredential($dbAppId, $dbRestKey, 'app_settings:onesignal_app_id + app_settings:onesignal_rest_api_key');
+    $appendCredential($dbLegacyAppId, $dbLegacyRestKey, 'app_settings:one_signal_app_id + app_settings:one_signal_rest_api_key');
+    $appendCredential($dbAppId, $dbLegacyRestKey, 'app_settings:onesignal_app_id + app_settings:one_signal_rest_api_key');
+    $appendCredential($dbLegacyAppId, $dbRestKey, 'app_settings:one_signal_app_id + app_settings:onesignal_rest_api_key');
+    $appendCredential($envAppId, $envRestKey, 'ENV:ONESIGNAL_APP_ID + ENV:ONESIGNAL_REST_API_KEY');
+    $appendCredential($envLegacyAppId, $envLegacyRestKey, 'ENV:ONE_SIGNAL_APP_ID + ENV:ONE_SIGNAL_REST_API_KEY');
+    $appendCredential($configAppId, $configRestKey, 'config:ONESIGNAL_APP_ID + config:ONESIGNAL_REST_API_KEY');
+
+    foreach (oneSignalAppIdCandidatesForOrders() as $appCandidate) {
+        foreach (oneSignalRestApiKeyCandidatesForOrders() as $keyCandidate) {
+            $appendCredential(
+                $appCandidate['value'] ?? '',
+                $keyCandidate['value'] ?? '',
+                ($appCandidate['source'] ?? 'App ID') . ' + ' . ($keyCandidate['source'] ?? 'REST API Key')
+            );
+        }
+    }
+
+    return $credentials;
+}
+
 function getOneSignalAppId()
 {
-    $fromEnv = trim((string) (getenv('ONESIGNAL_APP_ID') ?: getenv('ONE_SIGNAL_APP_ID') ?: ''));
-    if ($fromEnv !== '') {
-        return $fromEnv;
-    }
-
-    $fromConfig = trim((string) (defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : ''));
-    if ($fromConfig !== '') {
-        return $fromConfig;
-    }
-
     $fromSettings = appSettingValue('onesignal_app_id', '');
     if ($fromSettings !== '') {
         return $fromSettings;
     }
 
-    return appSettingValue('one_signal_app_id', '');
-}
+    $legacySettings = appSettingValue('one_signal_app_id', '');
+    if ($legacySettings !== '') {
+        return $legacySettings;
+    }
 
-function getOneSignalRestApiKey()
-{
-    $fromEnv = trim((string) (getenv('ONESIGNAL_REST_API_KEY') ?: getenv('ONE_SIGNAL_REST_API_KEY') ?: ''));
+    $fromEnv = trim((string) (getenv('ONESIGNAL_APP_ID') ?: getenv('ONE_SIGNAL_APP_ID') ?: ''));
     if ($fromEnv !== '') {
         return $fromEnv;
     }
 
-    $fromConfig = trim((string) (defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : ''));
-    if ($fromConfig !== '') {
-        return $fromConfig;
-    }
+    return trim((string) (defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : ''));
+}
 
+function getOneSignalRestApiKey()
+{
     $fromSettings = appSettingValue('onesignal_rest_api_key', '');
     if ($fromSettings !== '') {
-        return $fromSettings;
+        return normalizeOneSignalRestApiKeyForOrders($fromSettings);
     }
 
-    return appSettingValue('one_signal_rest_api_key', '');
+    $legacySettings = appSettingValue('one_signal_rest_api_key', '');
+    if ($legacySettings !== '') {
+        return normalizeOneSignalRestApiKeyForOrders($legacySettings);
+    }
+
+    $fromEnv = trim((string) (getenv('ONESIGNAL_REST_API_KEY') ?: getenv('ONE_SIGNAL_REST_API_KEY') ?: ''));
+    if ($fromEnv !== '') {
+        return normalizeOneSignalRestApiKeyForOrders($fromEnv);
+    }
+
+    return normalizeOneSignalRestApiKeyForOrders(defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : '');
 }
 
 function createUserNotification($userId, $title, $body, $type = 'order', $data = [])
@@ -4713,21 +4840,162 @@ function createProviderNotification($providerId, $title, $body, $type = 'order',
     }
 }
 
-function sendOneSignalToExternalUser($externalUserId, $title, $body, $data = [])
+function oneSignalCredentialErrorForOrders($statusCode, $responseText)
 {
-    $appId = getOneSignalAppId();
-    $restApiKey = getOneSignalRestApiKey();
+    $statusCode = (int) $statusCode;
+    if ($statusCode === 401 || $statusCode === 403) {
+        return true;
+    }
 
-    if ($appId === '' || $restApiKey === '' || trim((string) $externalUserId) === '') {
+    $lower = strtolower((string) $responseText);
+    return strpos($lower, 'access denied') !== false
+        || strpos($lower, 'authorization') !== false
+        || strpos($lower, 'valid api key') !== false
+        || strpos($lower, 'failed to parse app_id') !== false
+        || strpos($lower, 'app_id is present but malformed') !== false
+        || (strpos($lower, 'app id') !== false && strpos($lower, 'not found') !== false)
+        || (strpos($lower, 'app_id') !== false && strpos($lower, 'not found') !== false);
+}
+
+function oneSignalRecipientsFromResponseForOrders($responseText)
+{
+    $decoded = json_decode((string) $responseText, true);
+    if (!is_array($decoded) || !array_key_exists('recipients', $decoded)) {
+        return null;
+    }
+
+    return max(0, (int) $decoded['recipients']);
+}
+
+function postOneSignalPayloadForOrders(array $payload)
+{
+    if (!function_exists('curl_init')) {
+        return [
+            'ok' => false,
+            'recipients' => null,
+            'error' => 'cURL is not available',
+        ];
+    }
+
+    $credentials = oneSignalCredentialCandidatesForOrders();
+    if (empty($credentials)) {
+        return [
+            'ok' => false,
+            'recipients' => null,
+            'error' => 'OneSignal credentials are missing',
+        ];
+    }
+
+    $credentialErrors = [];
+    foreach ($credentials as $credential) {
+        $candidatePayload = $payload;
+        $candidatePayload['app_id'] = (string) ($credential['app_id'] ?? '');
+        $jsonPayload = json_encode($candidatePayload, JSON_UNESCAPED_UNICODE);
+        if ($jsonPayload === false) {
+            return [
+                'ok' => false,
+                'recipients' => null,
+                'error' => 'JSON encode failed',
+            ];
+        }
+
+        $ch = curl_init('https://api.onesignal.com/notifications');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json; charset=utf-8',
+                'Authorization: Key ' . normalizeOneSignalRestApiKeyForOrders($credential['api_key'] ?? ''),
+            ],
+            CURLOPT_POSTFIELDS => $jsonPayload,
+            CURLOPT_TIMEOUT => 8,
+            CURLOPT_CONNECTTIMEOUT => 4,
+        ]);
+
+        $response = curl_exec($ch);
+        $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($response !== false && $statusCode >= 200 && $statusCode < 300) {
+            return [
+                'ok' => true,
+                'recipients' => oneSignalRecipientsFromResponseForOrders($response),
+                'error' => '',
+            ];
+        }
+
+        $details = $curlError !== '' ? $curlError : trim((string) $response);
+        if ($details === '') {
+            $details = 'HTTP ' . $statusCode;
+        }
+
+        if (oneSignalCredentialErrorForOrders($statusCode, $details)) {
+            $credentialErrors[] = (string) ($credential['source'] ?? 'unknown') . ': ' . $details;
+            continue;
+        }
+
+        return [
+            'ok' => false,
+            'recipients' => null,
+            'error' => $details,
+        ];
+    }
+
+    return [
+        'ok' => false,
+        'recipients' => null,
+        'error' => !empty($credentialErrors) ? implode(' | ', $credentialErrors) : 'No valid OneSignal credentials accepted',
+    ];
+}
+
+function oneSignalTargetDeliveredForOrders(array $result)
+{
+    if (empty($result['ok'])) {
         return false;
     }
 
-    $payload = [
-        'app_id' => $appId,
+    return !array_key_exists('recipients', $result)
+        || $result['recipients'] === null
+        || (int) $result['recipients'] > 0;
+}
+
+function oneSignalDeviceTokensForOrders($table, $id)
+{
+    global $conn;
+
+    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $table);
+    if (!in_array($safeTable, ['users', 'providers'], true) || (int) $id <= 0) {
+        return [];
+    }
+
+    if (!tableExists($safeTable) || !tableColumnExists($safeTable, 'device_token')) {
+        return [];
+    }
+
+    $stmt = $conn->prepare("SELECT device_token FROM `{$safeTable}` WHERE id = ? LIMIT 1");
+    if (!$stmt) {
+        return [];
+    }
+
+    $rowId = (int) $id;
+    $stmt->bind_param("i", $rowId);
+    $stmt->execute();
+    $row = $stmt->get_result()->fetch_assoc();
+    $token = trim((string) ($row['device_token'] ?? ''));
+
+    return strlen($token) >= 8 ? [$token] : [];
+}
+
+function sendOneSignalToExternalUser($externalUserId, $title, $body, $data = [], array $subscriptionIds = [])
+{
+    $external = trim((string) $externalUserId);
+    if ($external === '') {
+        return false;
+    }
+
+    $basePayload = [
         'target_channel' => 'push',
-        'include_aliases' => [
-            'external_id' => [trim((string) $externalUserId)],
-        ],
         'headings' => [
             'en' => $title,
             'ar' => $title,
@@ -4739,37 +5007,45 @@ function sendOneSignalToExternalUser($externalUserId, $title, $body, $data = [])
         'data' => is_array($data) ? $data : [],
     ];
 
-    $jsonPayload = json_encode($payload, JSON_UNESCAPED_UNICODE);
-    if ($jsonPayload === false) {
-        return false;
+    $aliasPayload = $basePayload;
+    $aliasPayload['include_aliases'] = [
+        'external_id' => [$external],
+    ];
+
+    $aliasResult = postOneSignalPayloadForOrders($aliasPayload);
+    if (oneSignalTargetDeliveredForOrders($aliasResult)) {
+        return true;
     }
 
-    if (!function_exists('curl_init')) {
-        return false;
+    $subscriptionIds = array_values(array_unique(array_filter(array_map(static function ($value) {
+        return trim((string) $value);
+    }, $subscriptionIds), static function ($value) {
+        return strlen($value) >= 8;
+    })));
+
+    foreach (array_chunk($subscriptionIds, 200) as $chunk) {
+        $subscriptionPayload = $basePayload;
+        $subscriptionPayload['include_subscription_ids'] = array_values($chunk);
+
+        $subscriptionResult = postOneSignalPayloadForOrders($subscriptionPayload);
+        if (oneSignalTargetDeliveredForOrders($subscriptionResult)) {
+            return true;
+        }
+
+        $legacyPayload = $basePayload;
+        $legacyPayload['include_player_ids'] = array_values($chunk);
+        $legacyResult = postOneSignalPayloadForOrders($legacyPayload);
+        if (oneSignalTargetDeliveredForOrders($legacyResult)) {
+            return true;
+        }
     }
 
-    $ch = curl_init('https://api.onesignal.com/notifications');
-    curl_setopt_array($ch, [
-        CURLOPT_POST => true,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => [
-            'Content-Type: application/json; charset=utf-8',
-            'Authorization: Key ' . $restApiKey,
-        ],
-        CURLOPT_POSTFIELDS => $jsonPayload,
-        CURLOPT_TIMEOUT => 8,
-        CURLOPT_CONNECTTIMEOUT => 4,
-    ]);
+    error_log(
+        'Order OneSignal push failed for target ' . $external
+        . '; alias_error=' . (string) ($aliasResult['error'] ?? '')
+    );
 
-    $response = curl_exec($ch);
-    $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
-
-    if ($response === false) {
-        return false;
-    }
-
-    return $statusCode >= 200 && $statusCode < 300;
+    return false;
 }
 
 function notifyUserOrderEvent($userId, $orderId, $title, $body, $type = 'order', $extraData = [])
@@ -4791,7 +5067,13 @@ function notifyUserOrderEvent($userId, $orderId, $title, $body, $type = 'order',
     );
 
     createUserNotification($userId, $title, $body, $type, $data);
-    sendOneSignalToExternalUser((string) $userId, $title, $body, $data);
+    sendOneSignalToExternalUser(
+        (string) $userId,
+        $title,
+        $body,
+        $data,
+        oneSignalDeviceTokensForOrders('users', $userId)
+    );
 }
 
 function notifyProviderOrderEvent($providerId, $orderId, $title, $body, $type = 'order', $extraData = [])
@@ -4814,7 +5096,13 @@ function notifyProviderOrderEvent($providerId, $orderId, $title, $body, $type = 
     );
 
     createProviderNotification($providerId, $title, $body, $type, $data);
-    sendOneSignalToExternalUser('provider_' . $providerId, $title, $body, $data);
+    sendOneSignalToExternalUser(
+        'provider_' . $providerId,
+        $title,
+        $body,
+        $data,
+        oneSignalDeviceTokensForOrders('providers', $providerId)
+    );
 }
 
 function resolveOrderProviderIdsForNotification($orderId, array $assignmentStatuses = ['assigned', 'accepted', 'in_progress', 'completed'])

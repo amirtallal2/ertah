@@ -66,10 +66,7 @@ define(
 );
 define(
     'ONESIGNAL_REST_API_KEY',
-    trim((string) $env(
-        'ONESIGNAL_REST_API_KEY',
-        'os_v2_app_co7yvfitbrhinngm5en5hmjdej6t3oxcwipetje63m3ww4qgjiihyie4vieejvov7ppgun6olv6yohwiblejibryvswqrsiqe2xvopy'
-    ))
+    trim((string) $env('ONESIGNAL_REST_API_KEY', ''))
 );
 
 // إعدادات الأمان

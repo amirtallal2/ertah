@@ -580,50 +580,317 @@ function createOrderAdminProviderNotification($providerId, $title, $body, $type 
 
 function orderAdminOneSignalAppId()
 {
+    $settingsValue = trim((string) getAdminAppSetting('onesignal_app_id', ''));
+    if ($settingsValue !== '') {
+        return $settingsValue;
+    }
+
+    $legacySettingsValue = trim((string) getAdminAppSetting('one_signal_app_id', ''));
+    if ($legacySettingsValue !== '') {
+        return $legacySettingsValue;
+    }
+
     $envValue = trim((string) (getenv('ONESIGNAL_APP_ID') ?: getenv('ONE_SIGNAL_APP_ID') ?: ''));
     if ($envValue !== '') {
         return $envValue;
     }
 
-    $configValue = trim((string) (defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : ''));
-    if ($configValue !== '') {
-        return $configValue;
-    }
-
-    return trim((string) getAdminAppSetting('onesignal_app_id', getAdminAppSetting('one_signal_app_id', '')));
+    return trim((string) (defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : ''));
 }
 
 function orderAdminOneSignalRestApiKey()
 {
+    $settingsValue = trim((string) getAdminAppSetting('onesignal_rest_api_key', ''));
+    if ($settingsValue !== '') {
+        return orderAdminNormalizeOneSignalRestApiKey($settingsValue);
+    }
+
+    $legacySettingsValue = trim((string) getAdminAppSetting('one_signal_rest_api_key', ''));
+    if ($legacySettingsValue !== '') {
+        return orderAdminNormalizeOneSignalRestApiKey($legacySettingsValue);
+    }
+
     $envValue = trim((string) (getenv('ONESIGNAL_REST_API_KEY') ?: getenv('ONE_SIGNAL_REST_API_KEY') ?: ''));
     if ($envValue !== '') {
-        return $envValue;
+        return orderAdminNormalizeOneSignalRestApiKey($envValue);
     }
 
-    $configValue = trim((string) (defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : ''));
-    if ($configValue !== '') {
-        return $configValue;
-    }
-
-    return trim((string) getAdminAppSetting('onesignal_rest_api_key', getAdminAppSetting('one_signal_rest_api_key', '')));
+    return orderAdminNormalizeOneSignalRestApiKey(defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : '');
 }
 
-function sendOrderAdminOneSignalToExternalUser($externalUserId, $title, $body, array $data = [])
+function orderAdminNormalizeOneSignalRestApiKey($raw)
 {
-    $appId = orderAdminOneSignalAppId();
-    $restApiKey = orderAdminOneSignalRestApiKey();
-    $external = trim((string) $externalUserId);
+    $value = trim((string) $raw);
+    if ($value === '') {
+        return '';
+    }
 
-    if ($appId === '' || $restApiKey === '' || $external === '' || !function_exists('curl_init')) {
+    $value = trim($value, " \t\n\r\0\x0B\"'");
+    $value = preg_replace('/^authorization\s*:\s*/i', '', $value);
+    $value = preg_replace('/^(key|basic|bearer)\s+/i', '', trim((string) $value));
+    return trim((string) $value, " \t\n\r\0\x0B\"'");
+}
+
+function orderAdminAppendOneSignalCandidate(array &$candidates, $value, $source, $isRestKey = false)
+{
+    $value = trim((string) $value);
+    if ($isRestKey) {
+        $value = orderAdminNormalizeOneSignalRestApiKey($value);
+    }
+    if ($value === '') {
+        return;
+    }
+
+    foreach ($candidates as $candidate) {
+        if (($candidate['value'] ?? '') === $value) {
+            return;
+        }
+    }
+
+    $candidates[] = [
+        'value' => $value,
+        'source' => (string) $source,
+    ];
+}
+
+function orderAdminOneSignalAppIdCandidates()
+{
+    $candidates = [];
+
+    orderAdminAppendOneSignalCandidate($candidates, getAdminAppSetting('onesignal_app_id', ''), 'app_settings:onesignal_app_id');
+    orderAdminAppendOneSignalCandidate($candidates, getAdminAppSetting('one_signal_app_id', ''), 'app_settings:one_signal_app_id');
+    orderAdminAppendOneSignalCandidate($candidates, getenv('ONESIGNAL_APP_ID') ?: '', 'ENV:ONESIGNAL_APP_ID');
+    orderAdminAppendOneSignalCandidate($candidates, getenv('ONE_SIGNAL_APP_ID') ?: '', 'ENV:ONE_SIGNAL_APP_ID');
+    orderAdminAppendOneSignalCandidate(
+        $candidates,
+        defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : '',
+        'config:ONESIGNAL_APP_ID'
+    );
+
+    return $candidates;
+}
+
+function orderAdminOneSignalRestApiKeyCandidates()
+{
+    $candidates = [];
+
+    orderAdminAppendOneSignalCandidate($candidates, getAdminAppSetting('onesignal_rest_api_key', ''), 'app_settings:onesignal_rest_api_key', true);
+    orderAdminAppendOneSignalCandidate($candidates, getAdminAppSetting('one_signal_rest_api_key', ''), 'app_settings:one_signal_rest_api_key', true);
+    orderAdminAppendOneSignalCandidate($candidates, getenv('ONESIGNAL_REST_API_KEY') ?: '', 'ENV:ONESIGNAL_REST_API_KEY', true);
+    orderAdminAppendOneSignalCandidate($candidates, getenv('ONE_SIGNAL_REST_API_KEY') ?: '', 'ENV:ONE_SIGNAL_REST_API_KEY', true);
+    orderAdminAppendOneSignalCandidate(
+        $candidates,
+        defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : '',
+        'config:ONESIGNAL_REST_API_KEY',
+        true
+    );
+
+    return $candidates;
+}
+
+function orderAdminOneSignalCredentialCandidates()
+{
+    $credentials = [];
+    $seen = [];
+
+    $appendCredential = static function ($appId, $apiKey, $source) use (&$credentials, &$seen) {
+        $appId = trim((string) $appId);
+        $apiKey = orderAdminNormalizeOneSignalRestApiKey($apiKey);
+        if ($appId === '' || $apiKey === '') {
+            return;
+        }
+
+        $fingerprint = $appId . '|' . $apiKey;
+        if (isset($seen[$fingerprint])) {
+            return;
+        }
+        $seen[$fingerprint] = true;
+
+        $credentials[] = [
+            'app_id' => $appId,
+            'api_key' => $apiKey,
+            'source' => (string) $source,
+        ];
+    };
+
+    $dbAppId = getAdminAppSetting('onesignal_app_id', '');
+    $dbLegacyAppId = getAdminAppSetting('one_signal_app_id', '');
+    $dbRestKey = getAdminAppSetting('onesignal_rest_api_key', '');
+    $dbLegacyRestKey = getAdminAppSetting('one_signal_rest_api_key', '');
+    $envAppId = getenv('ONESIGNAL_APP_ID') ?: '';
+    $envLegacyAppId = getenv('ONE_SIGNAL_APP_ID') ?: '';
+    $envRestKey = getenv('ONESIGNAL_REST_API_KEY') ?: '';
+    $envLegacyRestKey = getenv('ONE_SIGNAL_REST_API_KEY') ?: '';
+    $configAppId = defined('ONESIGNAL_APP_ID') ? ONESIGNAL_APP_ID : '';
+    $configRestKey = defined('ONESIGNAL_REST_API_KEY') ? ONESIGNAL_REST_API_KEY : '';
+
+    $appendCredential($dbAppId, $dbRestKey, 'app_settings:onesignal_app_id + app_settings:onesignal_rest_api_key');
+    $appendCredential($dbLegacyAppId, $dbLegacyRestKey, 'app_settings:one_signal_app_id + app_settings:one_signal_rest_api_key');
+    $appendCredential($dbAppId, $dbLegacyRestKey, 'app_settings:onesignal_app_id + app_settings:one_signal_rest_api_key');
+    $appendCredential($dbLegacyAppId, $dbRestKey, 'app_settings:one_signal_app_id + app_settings:onesignal_rest_api_key');
+    $appendCredential($envAppId, $envRestKey, 'ENV:ONESIGNAL_APP_ID + ENV:ONESIGNAL_REST_API_KEY');
+    $appendCredential($envLegacyAppId, $envLegacyRestKey, 'ENV:ONE_SIGNAL_APP_ID + ENV:ONE_SIGNAL_REST_API_KEY');
+    $appendCredential($configAppId, $configRestKey, 'config:ONESIGNAL_APP_ID + config:ONESIGNAL_REST_API_KEY');
+
+    foreach (orderAdminOneSignalAppIdCandidates() as $appCandidate) {
+        foreach (orderAdminOneSignalRestApiKeyCandidates() as $keyCandidate) {
+            $appendCredential(
+                $appCandidate['value'] ?? '',
+                $keyCandidate['value'] ?? '',
+                ($appCandidate['source'] ?? 'App ID') . ' + ' . ($keyCandidate['source'] ?? 'REST API Key')
+            );
+        }
+    }
+
+    return $credentials;
+}
+
+function orderAdminOneSignalCredentialError($statusCode, $responseText)
+{
+    $statusCode = (int) $statusCode;
+    if ($statusCode === 401 || $statusCode === 403) {
+        return true;
+    }
+
+    $lower = strtolower((string) $responseText);
+    return strpos($lower, 'access denied') !== false
+        || strpos($lower, 'authorization') !== false
+        || strpos($lower, 'valid api key') !== false
+        || strpos($lower, 'failed to parse app_id') !== false
+        || strpos($lower, 'app_id is present but malformed') !== false
+        || (strpos($lower, 'app id') !== false && strpos($lower, 'not found') !== false)
+        || (strpos($lower, 'app_id') !== false && strpos($lower, 'not found') !== false);
+}
+
+function orderAdminOneSignalRecipientsFromResponse($responseText)
+{
+    $decoded = json_decode((string) $responseText, true);
+    if (!is_array($decoded) || !array_key_exists('recipients', $decoded)) {
+        return null;
+    }
+
+    return max(0, (int) $decoded['recipients']);
+}
+
+function orderAdminPostOneSignalPayload(array $payload)
+{
+    if (!function_exists('curl_init')) {
+        return [
+            'ok' => false,
+            'recipients' => null,
+            'error' => 'cURL is not available',
+        ];
+    }
+
+    $credentials = orderAdminOneSignalCredentialCandidates();
+    if (empty($credentials)) {
+        return [
+            'ok' => false,
+            'recipients' => null,
+            'error' => 'OneSignal credentials are missing',
+        ];
+    }
+
+    $credentialErrors = [];
+    foreach ($credentials as $credential) {
+        $candidatePayload = $payload;
+        $candidatePayload['app_id'] = (string) ($credential['app_id'] ?? '');
+        $jsonPayload = json_encode($candidatePayload, JSON_UNESCAPED_UNICODE);
+        if ($jsonPayload === false) {
+            return [
+                'ok' => false,
+                'recipients' => null,
+                'error' => 'JSON encode failed',
+            ];
+        }
+
+        $ch = curl_init('https://api.onesignal.com/notifications');
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_HTTPHEADER => [
+                'Content-Type: application/json; charset=utf-8',
+                'Authorization: Key ' . orderAdminNormalizeOneSignalRestApiKey($credential['api_key'] ?? ''),
+            ],
+            CURLOPT_POSTFIELDS => $jsonPayload,
+            CURLOPT_TIMEOUT => 8,
+            CURLOPT_CONNECTTIMEOUT => 4,
+        ]);
+
+        $response = curl_exec($ch);
+        $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlError = curl_error($ch);
+        curl_close($ch);
+
+        if ($response !== false && $statusCode >= 200 && $statusCode < 300) {
+            return [
+                'ok' => true,
+                'recipients' => orderAdminOneSignalRecipientsFromResponse($response),
+                'error' => '',
+            ];
+        }
+
+        $details = $curlError !== '' ? $curlError : trim((string) $response);
+        if ($details === '') {
+            $details = 'HTTP ' . $statusCode;
+        }
+
+        if (orderAdminOneSignalCredentialError($statusCode, $details)) {
+            $credentialErrors[] = (string) ($credential['source'] ?? 'unknown') . ': ' . $details;
+            continue;
+        }
+
+        return [
+            'ok' => false,
+            'recipients' => null,
+            'error' => $details,
+        ];
+    }
+
+    return [
+        'ok' => false,
+        'recipients' => null,
+        'error' => !empty($credentialErrors) ? implode(' | ', $credentialErrors) : 'No valid OneSignal credentials accepted',
+    ];
+}
+
+function orderAdminOneSignalTargetDelivered(array $result)
+{
+    if (empty($result['ok'])) {
         return false;
     }
 
-    $payload = json_encode([
-        'app_id' => $appId,
+    return !array_key_exists('recipients', $result)
+        || $result['recipients'] === null
+        || (int) $result['recipients'] > 0;
+}
+
+function orderAdminOneSignalDeviceTokens($table, $id)
+{
+    $safeTable = preg_replace('/[^a-zA-Z0-9_]/', '', (string) $table);
+    if (!in_array($safeTable, ['users', 'providers'], true) || (int) $id <= 0) {
+        return [];
+    }
+
+    if (!tableExistsByName($safeTable) || !tableColumnExistsByName($safeTable, 'device_token')) {
+        return [];
+    }
+
+    $row = db()->fetch("SELECT device_token FROM `{$safeTable}` WHERE id = ? LIMIT 1", [(int) $id]);
+    $token = trim((string) ($row['device_token'] ?? ''));
+
+    return strlen($token) >= 8 ? [$token] : [];
+}
+
+function sendOrderAdminOneSignalToExternalUser($externalUserId, $title, $body, array $data = [], array $subscriptionIds = [])
+{
+    $external = trim((string) $externalUserId);
+    if ($external === '') {
+        return false;
+    }
+
+    $basePayload = [
         'target_channel' => 'push',
-        'include_aliases' => [
-            'external_id' => [$external],
-        ],
         'headings' => [
             'ar' => $title,
             'en' => $title,
@@ -633,30 +900,46 @@ function sendOrderAdminOneSignalToExternalUser($externalUserId, $title, $body, a
             'en' => $body,
         ],
         'data' => $data,
-    ], JSON_UNESCAPED_UNICODE);
+    ];
 
-    if ($payload === false) {
-        return false;
+    $aliasPayload = $basePayload;
+    $aliasPayload['include_aliases'] = [
+        'external_id' => [$external],
+    ];
+
+    $aliasResult = orderAdminPostOneSignalPayload($aliasPayload);
+    if (orderAdminOneSignalTargetDelivered($aliasResult)) {
+        return true;
     }
 
-    $ch = curl_init('https://api.onesignal.com/notifications');
-    curl_setopt_array($ch, [
-        CURLOPT_POST => true,
-        CURLOPT_RETURNTRANSFER => true,
-        CURLOPT_HTTPHEADER => [
-            'Content-Type: application/json; charset=utf-8',
-            'Authorization: Key ' . $restApiKey,
-        ],
-        CURLOPT_POSTFIELDS => $payload,
-        CURLOPT_TIMEOUT => 8,
-        CURLOPT_CONNECTTIMEOUT => 4,
-    ]);
+    $subscriptionIds = array_values(array_unique(array_filter(array_map(static function ($value) {
+        return trim((string) $value);
+    }, $subscriptionIds), static function ($value) {
+        return strlen($value) >= 8;
+    })));
 
-    $response = curl_exec($ch);
-    $statusCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
-    curl_close($ch);
+    foreach (array_chunk($subscriptionIds, 200) as $chunk) {
+        $subscriptionPayload = $basePayload;
+        $subscriptionPayload['include_subscription_ids'] = array_values($chunk);
+        $subscriptionResult = orderAdminPostOneSignalPayload($subscriptionPayload);
+        if (orderAdminOneSignalTargetDelivered($subscriptionResult)) {
+            return true;
+        }
 
-    return $response !== false && $statusCode >= 200 && $statusCode < 300;
+        $legacyPayload = $basePayload;
+        $legacyPayload['include_player_ids'] = array_values($chunk);
+        $legacyResult = orderAdminPostOneSignalPayload($legacyPayload);
+        if (orderAdminOneSignalTargetDelivered($legacyResult)) {
+            return true;
+        }
+    }
+
+    error_log(
+        'Admin order OneSignal push failed for target ' . $external
+        . '; alias_error=' . (string) ($aliasResult['error'] ?? '')
+    );
+
+    return false;
 }
 
 function notifyOrderCustomerFromAdmin($orderId, $title, $body, array $extraData = [])
@@ -679,7 +962,13 @@ function notifyOrderCustomerFromAdmin($orderId, $title, $body, array $extraData 
     ], $extraData);
 
     createOrderAdminUserNotification($userId, $title, $body, 'order', $payload);
-    sendOrderAdminOneSignalToExternalUser((string) $userId, $title, $body, $payload);
+    sendOrderAdminOneSignalToExternalUser(
+        (string) $userId,
+        $title,
+        $body,
+        $payload,
+        orderAdminOneSignalDeviceTokens('users', $userId)
+    );
 }
 
 function notifyOrderProvidersFromAdmin($orderId, array $providerIds, $title, $body, array $extraData = [])
@@ -703,7 +992,13 @@ function notifyOrderProvidersFromAdmin($orderId, array $providerIds, $title, $bo
 
     foreach ($ids as $providerId) {
         createOrderAdminProviderNotification((int) $providerId, $title, $body, 'order', $payload);
-        sendOrderAdminOneSignalToExternalUser('provider_' . (int) $providerId, $title, $body, $payload);
+        sendOrderAdminOneSignalToExternalUser(
+            'provider_' . (int) $providerId,
+            $title,
+            $body,
+            $payload,
+            orderAdminOneSignalDeviceTokens('providers', (int) $providerId)
+        );
     }
 }
 
