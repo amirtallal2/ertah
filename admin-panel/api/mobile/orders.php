@@ -5037,6 +5037,101 @@ function oneSignalDeviceTokensForOrders($table, $id)
     return strlen($token) >= 8 ? [$token] : [];
 }
 
+function oneSignalExternalIdAllowedForOrders($value)
+{
+    $value = trim((string) $value);
+    if ($value === '') {
+        return false;
+    }
+
+    $restricted = [
+        'na', 'null', '0', '1', '-1', 'unqualified', 'all', 'nan',
+        '00000000-0000-0000-0000-000000000000', '-', 'none', 'ok',
+        '123abc', 'unknown', 'invalid_user', 'undefined', 'not set',
+    ];
+
+    return !in_array(strtolower($value), $restricted, true);
+}
+
+function oneSignalAliasMapForOrderTarget($externalUserId)
+{
+    $external = trim((string) $externalUserId);
+    if ($external === '') {
+        return [];
+    }
+
+    $aliases = [];
+    $externalIds = [];
+    if (oneSignalExternalIdAllowedForOrders($external)) {
+        $externalIds[] = $external;
+    }
+
+    if (preg_match('/^provider_(\d+)$/', $external, $providerMatch)) {
+        $aliases['darfix_provider_id'] = [$providerMatch[1]];
+    } elseif (preg_match('/^user_(\d+)$/', $external, $userMatch)) {
+        if (oneSignalExternalIdAllowedForOrders($userMatch[1])) {
+            $externalIds[] = $userMatch[1];
+        }
+        $aliases['darfix_user_id'] = [$userMatch[1]];
+    } elseif (ctype_digit($external)) {
+        $externalIds[] = 'user_' . $external;
+        $aliases['darfix_user_id'] = [$external];
+    }
+
+    if (!empty($externalIds)) {
+        $aliases['external_id'] = $externalIds;
+    }
+
+    foreach ($aliases as $key => $values) {
+        $aliases[$key] = array_values(array_unique(array_filter(array_map(static function ($value) {
+            return trim((string) $value);
+        }, $values), static function ($value) {
+            return $value !== '';
+        })));
+        if (empty($aliases[$key])) {
+            unset($aliases[$key]);
+        }
+    }
+
+    return $aliases;
+}
+
+function oneSignalTagFiltersForOrderTarget($externalUserId)
+{
+    $external = trim((string) $externalUserId);
+    if ($external === '') {
+        return [];
+    }
+
+    $accountType = '';
+    $tagKey = '';
+    $tagValue = '';
+
+    if (preg_match('/^provider_(\d+)$/', $external, $providerMatch)) {
+        $accountType = 'provider';
+        $tagKey = 'darfix_provider_id';
+        $tagValue = $providerMatch[1];
+    } elseif (preg_match('/^user_(\d+)$/', $external, $userMatch)) {
+        $accountType = 'user';
+        $tagKey = 'darfix_user_id';
+        $tagValue = $userMatch[1];
+    } elseif (ctype_digit($external)) {
+        $accountType = 'user';
+        $tagKey = 'darfix_user_id';
+        $tagValue = $external;
+    }
+
+    if ($accountType === '' || $tagKey === '' || $tagValue === '') {
+        return [];
+    }
+
+    return [
+        ['field' => 'tag', 'key' => 'darfix_account_type', 'relation' => '=', 'value' => $accountType],
+        ['operator' => 'AND'],
+        ['field' => 'tag', 'key' => $tagKey, 'relation' => '=', 'value' => $tagValue],
+    ];
+}
+
 function sendOneSignalToExternalUser($externalUserId, $title, $body, $data = [], array $subscriptionIds = [])
 {
     $external = trim((string) $externalUserId);
@@ -5058,13 +5153,23 @@ function sendOneSignalToExternalUser($externalUserId, $title, $body, $data = [],
     ];
 
     $aliasPayload = $basePayload;
-    $aliasPayload['include_aliases'] = [
-        'external_id' => [$external],
-    ];
+    $aliasPayload['include_aliases'] = oneSignalAliasMapForOrderTarget($external);
 
     $aliasResult = postOneSignalPayloadForOrders($aliasPayload);
     if (oneSignalTargetDeliveredForOrders($aliasResult)) {
         return true;
+    }
+
+    $tagFilters = oneSignalTagFiltersForOrderTarget($external);
+    $tagResult = ['error' => ''];
+    if (!empty($tagFilters)) {
+        $tagPayload = $basePayload;
+        $tagPayload['filters'] = $tagFilters;
+
+        $tagResult = postOneSignalPayloadForOrders($tagPayload);
+        if (oneSignalTargetDeliveredForOrders($tagResult)) {
+            return true;
+        }
     }
 
     $subscriptionIds = array_values(array_unique(array_filter(array_map(static function ($value) {
@@ -5093,6 +5198,7 @@ function sendOneSignalToExternalUser($externalUserId, $title, $body, $data = [],
     error_log(
         'Order OneSignal push failed for target ' . $external
         . '; alias_error=' . (string) ($aliasResult['error'] ?? '')
+        . '; tag_error=' . (string) ($tagResult['error'] ?? '')
     );
 
     return false;

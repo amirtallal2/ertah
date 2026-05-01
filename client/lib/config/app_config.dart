@@ -85,7 +85,7 @@ class AppConfig {
   // App Info
   static const String appName = 'Darfix';
   static const String appNameEn = 'Darfix';
-  static const String appVersion = '1.0.1';
+  static const String appVersion = '1.0.2';
   static const String appTagline = 'خدمات منزلية شاملة';
 
   // App Logo

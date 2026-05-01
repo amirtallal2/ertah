@@ -111,7 +111,12 @@ class PushNotificationService {
     if (!canBind) {
       if (_boundExternalId != null) {
         try {
-          OneSignal.logout();
+          await OneSignal.User.removeAliases(['darfix_provider_id']);
+          await OneSignal.User.removeTags([
+            'darfix_account_type',
+            'darfix_provider_id',
+          ]);
+          await OneSignal.logout();
         } catch (_) {}
       }
       _boundExternalId = null;
@@ -124,7 +129,14 @@ class PushNotificationService {
     final externalId = 'provider_$providerId';
     if (_boundExternalId != externalId) {
       try {
-        OneSignal.login(externalId);
+        await OneSignal.login(externalId);
+        await OneSignal.User.addAliases({
+          'darfix_provider_id': providerId.toString(),
+        });
+        await OneSignal.User.addTags({
+          'darfix_account_type': 'provider',
+          'darfix_provider_id': providerId.toString(),
+        });
         _boundExternalId = externalId;
       } catch (e) {
         debugPrint('PushNotificationService login sync error: $e');
@@ -195,7 +207,7 @@ class PushNotificationService {
 
   Future<void> _syncDeviceTokenToBackend() async {
     try {
-      final subscriptionId = OneSignal.User.pushSubscription.id;
+      final subscriptionId = await _resolveSubscriptionIdWithRetry();
       if (subscriptionId == null || subscriptionId.trim().isEmpty) {
         return;
       }
@@ -216,5 +228,16 @@ class PushNotificationService {
     } catch (e) {
       debugPrint('PushNotificationService token sync error: $e');
     }
+  }
+
+  Future<String?> _resolveSubscriptionIdWithRetry() async {
+    for (var attempt = 0; attempt < 6; attempt += 1) {
+      final subscriptionId = OneSignal.User.pushSubscription.id?.trim();
+      if (subscriptionId != null && subscriptionId.isNotEmpty) {
+        return subscriptionId;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    return null;
   }
 }

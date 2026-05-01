@@ -114,7 +114,12 @@ class PushNotificationService {
     if (!canBind) {
       if (_boundUserId != null) {
         try {
-          OneSignal.logout();
+          await OneSignal.User.removeAliases(['darfix_user_id']);
+          await OneSignal.User.removeTags([
+            'darfix_account_type',
+            'darfix_user_id',
+          ]);
+          await OneSignal.logout();
         } catch (_) {}
       }
       _boundUserId = null;
@@ -126,7 +131,12 @@ class PushNotificationService {
     final userId = authProvider.user!.id;
     if (_boundUserId != userId) {
       try {
-        OneSignal.login(userId.toString());
+        await OneSignal.login(_externalIdForUser(userId));
+        await OneSignal.User.addAliases({'darfix_user_id': userId.toString()});
+        await OneSignal.User.addTags({
+          'darfix_account_type': 'user',
+          'darfix_user_id': userId.toString(),
+        });
         _boundUserId = userId;
       } catch (e) {
         debugPrint('PushNotificationService login sync error: $e');
@@ -135,6 +145,8 @@ class PushNotificationService {
 
     await _syncDeviceTokenToBackend();
   }
+
+  String _externalIdForUser(int userId) => 'user_$userId';
 
   int? takePendingOrderId() {
     final orderId = _pendingOrderId;
@@ -197,7 +209,7 @@ class PushNotificationService {
 
   Future<void> _syncDeviceTokenToBackend() async {
     try {
-      final subscriptionId = OneSignal.User.pushSubscription.id;
+      final subscriptionId = await _resolveSubscriptionIdWithRetry();
       if (subscriptionId == null || subscriptionId.trim().isEmpty) {
         return;
       }
@@ -218,5 +230,16 @@ class PushNotificationService {
     } catch (e) {
       debugPrint('PushNotificationService token sync error: $e');
     }
+  }
+
+  Future<String?> _resolveSubscriptionIdWithRetry() async {
+    for (var attempt = 0; attempt < 6; attempt += 1) {
+      final subscriptionId = OneSignal.User.pushSubscription.id?.trim();
+      if (subscriptionId != null && subscriptionId.isNotEmpty) {
+        return subscriptionId;
+      }
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+    }
+    return null;
   }
 }
