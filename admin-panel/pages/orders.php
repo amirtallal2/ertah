@@ -345,6 +345,79 @@ function getSpecialOrderDisplayOverride($problemDetailsRaw): array
     ];
 }
 
+function resolveSpecialOrderServiceNamesForAdmin($problemDetailsRaw): array
+{
+    $details = normalizeOrderProblemDetailsForAdmin($problemDetailsRaw);
+    $module = detectSpecialOrderModuleForAdmin($details);
+    if ($module === '') {
+        return [];
+    }
+
+    $names = [];
+    $appendName = static function ($value) use (&$names): void {
+        $name = trim((string) $value);
+        if ($name !== '' && !in_array($name, $names, true)) {
+            $names[] = $name;
+        }
+    };
+
+    if ($module === 'container') {
+        $container = $details['container_request'] ?? [];
+        if ($container instanceof stdClass) {
+            $container = (array) $container;
+        }
+        if (!is_array($container)) {
+            $container = [];
+        }
+
+        $appendName($container['container_service_name'] ?? '');
+
+        $selectedServices = $container['selected_services'] ?? ($details['selected_services'] ?? []);
+        if ($selectedServices instanceof stdClass) {
+            $selectedServices = (array) $selectedServices;
+        }
+        if (is_array($selectedServices)) {
+            foreach ($selectedServices as $selectedService) {
+                if ($selectedService instanceof stdClass) {
+                    $selectedService = (array) $selectedService;
+                }
+                if (!is_array($selectedService)) {
+                    continue;
+                }
+                $appendName(
+                    $selectedService['name_ar']
+                    ?? $selectedService['name']
+                    ?? $selectedService['name_en']
+                    ?? ''
+                );
+            }
+        }
+
+        if (empty($names)) {
+            $size = trim((string) ($container['container_size'] ?? ''));
+            $appendName($size !== '' ? 'طلب خدمة الحاويات - ' . $size : 'طلب خدمة الحاويات');
+        }
+
+        return $names;
+    }
+
+    if ($module === 'furniture') {
+        $furniture = $details['furniture_request'] ?? [];
+        if ($furniture instanceof stdClass) {
+            $furniture = (array) $furniture;
+        }
+        if (is_array($furniture)) {
+            $appendName($furniture['service_name'] ?? '');
+            $appendName($furniture['area_name'] ?? '');
+        }
+        if (empty($names)) {
+            $appendName('طلب نقل العفش');
+        }
+    }
+
+    return $names;
+}
+
 function appendSpecialOrdersExclusionForAdmin(string &$where, array &$params, string $alias = 'o'): void
 {
     $clauses = [];
@@ -1228,6 +1301,19 @@ function ensureOrderRelationTables()
 function fetchOrderServiceItemsForAdmin($orderId, $problemDetailsRaw = null)
 {
     $items = [];
+    $specialServiceNames = resolveSpecialOrderServiceNamesForAdmin($problemDetailsRaw);
+    if (!empty($specialServiceNames)) {
+        foreach ($specialServiceNames as $serviceName) {
+            $items[] = [
+                'id' => 0,
+                'service_id' => null,
+                'service_name' => $serviceName,
+                'is_custom' => false,
+                'notes' => '',
+            ];
+        }
+        return $items;
+    }
 
     if (tableExistsByName('order_services')) {
         $rows = db()->fetchAll(
@@ -2800,6 +2886,11 @@ foreach ($orders as &$orderRow) {
         $problemDetails = $problemDetailsRaw;
     }
 
+    $specialOrderModuleForRow = detectSpecialOrderModuleForAdmin($problemDetails);
+    $specialServiceNamesForRow = $specialOrderModuleForRow !== ''
+        ? resolveSpecialOrderServiceNamesForAdmin($problemDetails)
+        : [];
+
     $customTitleFromDetails = '';
     $customDescriptionFromDetails = '';
     $customFlagFromDetails = false;
@@ -2827,12 +2918,14 @@ foreach ($orders as &$orderRow) {
         }
     }
 
-    $serviceNames = $orderServiceNamesMap[$orderId] ?? [];
+    $serviceNames = !empty($specialServiceNamesForRow)
+        ? $specialServiceNamesForRow
+        : ($orderServiceNamesMap[$orderId] ?? []);
     $customTitle = trim((string) ($orderCustomServiceTitleMap[$orderId] ?? ''));
     if ($customTitle === '') {
         $customTitle = $customTitleFromDetails;
     }
-    if ($customTitle !== '' && !in_array($customTitle, $serviceNames, true)) {
+    if ($specialOrderModuleForRow === '' && $customTitle !== '' && !in_array($customTitle, $serviceNames, true)) {
         $serviceNames[] = $customTitle;
     }
 
@@ -2857,10 +2950,11 @@ foreach ($orders as &$orderRow) {
         $customDescription = $customDescriptionFromDetails;
     }
 
-    $orderRow['is_custom_service_request'] =
-        !empty($orderHasCustomServiceMap[$orderId]) || $customFlagFromDetails;
-    $orderRow['custom_service_title'] = $customTitle;
-    $orderRow['custom_service_description'] = $customDescription;
+    $orderRow['special_order_module'] = $specialOrderModuleForRow;
+    $orderRow['is_custom_service_request'] = $specialOrderModuleForRow === ''
+        && (!empty($orderHasCustomServiceMap[$orderId]) || $customFlagFromDetails);
+    $orderRow['custom_service_title'] = $specialOrderModuleForRow === '' ? $customTitle : '';
+    $orderRow['custom_service_description'] = $specialOrderModuleForRow === '' ? $customDescription : '';
 }
 unset($orderRow);
 

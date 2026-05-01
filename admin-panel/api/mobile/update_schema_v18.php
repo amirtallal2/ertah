@@ -55,7 +55,9 @@ echo "Preparing container category/store accounting update...\n";
 ensureSpecialServicesSchema();
 
 $containerCategoryId = (int) (specialEnsureContainerCategoryId() ?? 0);
+$furnitureCategoryId = (int) (specialEnsureFurnitureCategoryId() ?? 0);
 echo "canonical_container_category_candidate={$containerCategoryId}\n";
+echo "canonical_furniture_category_candidate={$furnitureCategoryId}\n";
 
 if (v18TableExists('service_categories')) {
     $containerCategories = db()->fetchAll(
@@ -132,22 +134,66 @@ if (
     && v18ColumnExists('orders', 'problem_details')
     && v18ColumnExists('order_services', 'order_id')
 ) {
-    $customFilter = v18ColumnExists('order_services', 'is_custom')
-        ? 'COALESCE(os.is_custom, 0) = 0 AND'
-        : '';
+    // الطلبات الخاصة لها جداول مستقلة، لذلك لا نعرض/نحتفظ بصفوف order_services القديمة التي كانت تسبب ظهور "خدمة أخرى".
     $removedWrongServiceRows = db()->query(
         "DELETE os
          FROM order_services os
          INNER JOIN orders o ON o.id = os.order_id
-         WHERE {$customFilter}
-           (
+         WHERE (
                 o.problem_details LIKE '%\"module\":\"container_rental\"%'
                 OR o.problem_details LIKE '%\"type\":\"container_rental\"%'
                 OR o.problem_details LIKE '%\"container_request\"%'
+                OR o.problem_details LIKE '%\"module\":\"furniture_moving\"%'
+                OR o.problem_details LIKE '%\"type\":\"furniture_moving\"%'
+                OR o.problem_details LIKE '%\"furniture_request\"%'
            )"
     )->rowCount();
 }
-echo "container_order_regular_service_rows_removed={$removedWrongServiceRows}\n";
+echo "special_order_service_rows_removed={$removedWrongServiceRows}\n";
+
+$containerOrdersUpdated = 0;
+if (
+    $containerCategoryId > 0
+    && v18TableExists('orders')
+    && v18ColumnExists('orders', 'category_id')
+    && v18ColumnExists('orders', 'problem_details')
+) {
+    $containerOrdersUpdated = db()->query(
+        "UPDATE orders
+         SET category_id = ?
+         WHERE problem_details IS NOT NULL
+           AND problem_details <> ''
+           AND (
+                problem_details LIKE '%\"module\":\"container_rental\"%'
+                OR problem_details LIKE '%\"type\":\"container_rental\"%'
+                OR problem_details LIKE '%\"container_request\"%'
+           )",
+        [$containerCategoryId]
+    )->rowCount();
+}
+echo "container_orders_category_updated={$containerOrdersUpdated}\n";
+
+$furnitureOrdersUpdated = 0;
+if (
+    $furnitureCategoryId > 0
+    && v18TableExists('orders')
+    && v18ColumnExists('orders', 'category_id')
+    && v18ColumnExists('orders', 'problem_details')
+) {
+    $furnitureOrdersUpdated = db()->query(
+        "UPDATE orders
+         SET category_id = ?
+         WHERE problem_details IS NOT NULL
+           AND problem_details <> ''
+           AND (
+                problem_details LIKE '%\"module\":\"furniture_moving\"%'
+                OR problem_details LIKE '%\"type\":\"furniture_moving\"%'
+                OR problem_details LIKE '%\"furniture_request\"%'
+           )",
+        [$furnitureCategoryId]
+    )->rowCount();
+}
+echo "furniture_orders_category_updated={$furnitureOrdersUpdated}\n";
 
 $accountEntriesSynced = specialBackfillContainerStoreAccountEntries(5000);
 echo "container_store_account_entries_synced={$accountEntriesSynced}\n";
