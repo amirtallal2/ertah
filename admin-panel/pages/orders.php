@@ -2359,7 +2359,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $updateData['container_store_id'] = $storeId;
         }
 
-        db()->update('container_requests', $updateData, 'id = ?', [(int) $requestRow['id']]);
+        $containerRequestId = (int) $requestRow['id'];
+        db()->update('container_requests', $updateData, 'id = ?', [$containerRequestId]);
+        specialSyncContainerStoreAccountEntryForRequest($containerRequestId, (int) (getCurrentAdmin()['id'] ?? 0));
+
+        if ($storeId > 0) {
+            db()->query(
+                "UPDATE orders
+                 SET status = CASE WHEN status = 'pending' THEN 'assigned' ELSE status END
+                 WHERE id = ?",
+                [$orderId]
+            );
+        }
+
         logActivity('assign_container_store', 'container_requests', (int) $requestRow['id']);
         setFlashMessage('success', 'تم تحديث متجر الحاويات للطلب');
         redirect('orders.php?action=view&id=' . $orderId);
@@ -2925,7 +2937,11 @@ if ($action === 'view' && $id) {
         $specialOrderLinkedRequestUrl = 'container-requests.php';
         if (tableExistsByName('container_requests') && tableColumnExistsByName('container_requests', 'source_order_id')) {
             $linkedContainerRequest = db()->fetch(
-                'SELECT id, container_store_id FROM container_requests WHERE source_order_id = ? LIMIT 1',
+                'SELECT cr.id, COALESCE(cr.container_store_id, cs.store_id) AS container_store_id
+                 FROM container_requests cr
+                 LEFT JOIN container_services cs ON cs.id = cr.container_service_id
+                 WHERE cr.source_order_id = ?
+                 LIMIT 1',
                 [$id]
             );
             if ($linkedContainerRequest) {
@@ -3067,6 +3083,19 @@ if ($action === 'view' && $id) {
     
     // التقييم إن وجد
     $review = db()->fetch("SELECT * FROM reviews WHERE order_id = ?", [$id]);
+    if (!$review && tableExistsByName('container_store_reviews')) {
+        $review = db()->fetch(
+            "SELECT r.*, cs.name_ar AS container_store_name
+             FROM container_store_reviews r
+             LEFT JOIN container_stores cs ON cs.id = r.store_id
+             WHERE r.order_id = ?
+             LIMIT 1",
+            [$id]
+        );
+        if ($review) {
+            $review['review_type'] = 'container_store';
+        }
+    }
     $orderLiveLocation = fetchLatestOrderLiveLocationForAdmin($id, (int) ($order['provider_id'] ?? 0));
 
     $customerDisplayName = resolveOrderCustomerName($order);
@@ -4461,10 +4490,15 @@ include '../includes/header.php';
             <div class="card-header">
                 <h3 class="card-title">
                     <i class="fas fa-star" style="color: #fbbf24;"></i>
-                    التقييم
+                    التقييم<?php echo ($review['review_type'] ?? '') === 'container_store' ? ' - متجر الحاويات' : ''; ?>
                 </h3>
             </div>
             <div class="card-body">
+                <?php if (!empty($review['container_store_name'])): ?>
+                    <p style="margin: 0 0 10px; color: #4b5563;">
+                        المتجر: <?php echo htmlspecialchars((string) $review['container_store_name'], ENT_QUOTES, 'UTF-8'); ?>
+                    </p>
+                <?php endif; ?>
                 <div style="display: flex; gap: 3px; margin-bottom: 10px;">
                     <?php for ($i = 1; $i <= 5; $i++): ?>
                     <i class="fas fa-star" style="color: <?php echo $i <= $review['rating'] ? '#fbbf24' : '#e5e7eb'; ?>; font-size: 20px;"></i>

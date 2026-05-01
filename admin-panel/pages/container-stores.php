@@ -8,6 +8,7 @@ require_once '../includes/special_services.php';
 requireLogin();
 
 ensureSpecialServicesSchema();
+specialBackfillContainerStoreAccountEntries(1000);
 
 $admin = getCurrentAdmin();
 if (
@@ -180,10 +181,45 @@ if ($action === 'account' && $id) {
         [$id]
     );
 
+    $requestSummary = db()->fetch(
+        "SELECT
+            COUNT(*) AS total_requests,
+            COALESCE(SUM(CASE WHEN cr.status = 'completed' THEN 1 ELSE 0 END), 0) AS completed_requests,
+            COALESCE(SUM(CASE WHEN cr.status NOT IN ('completed', 'cancelled') THEN 1 ELSE 0 END), 0) AS active_requests,
+            COALESCE(SUM(COALESCE(NULLIF(cr.final_price, 0), NULLIF(cr.estimated_price, 0), NULLIF(o.total_amount, 0), 0)), 0) AS requests_value
+         FROM container_requests cr
+         LEFT JOIN container_services srv ON srv.id = cr.container_service_id
+         LEFT JOIN orders o ON o.id = cr.source_order_id
+         WHERE COALESCE(cr.container_store_id, srv.store_id) = ?",
+        [$id]
+    );
+
+    $sourceTotals = db()->fetchAll(
+        "SELECT source, entry_type, COUNT(*) AS rows_count, COALESCE(SUM(amount), 0) AS total_amount
+         FROM container_store_account_entries
+         WHERE store_id = ?
+         GROUP BY source, entry_type
+         ORDER BY source ASC, entry_type ASC",
+        [$id]
+    );
+
+    $reviewsSummary = ['reviews_count' => 0, 'avg_rating' => 0];
+    if (specialServiceTableExists('container_store_reviews')) {
+        $reviewsSummary = db()->fetch(
+            "SELECT COUNT(*) AS reviews_count, COALESCE(AVG(rating), 0) AS avg_rating
+             FROM container_store_reviews
+             WHERE store_id = ?",
+            [$id]
+        ) ?: $reviewsSummary;
+    }
+
     $entries = db()->fetchAll(
-        "SELECT e.*, a.full_name AS admin_name
+        "SELECT e.*, a.full_name AS admin_name,
+                cr.request_number, cr.source_order_id, o.order_number
          FROM container_store_account_entries e
          LEFT JOIN admins a ON a.id = e.created_by
+         LEFT JOIN container_requests cr ON e.reference_type = 'container_request' AND e.reference_id = cr.id
+         LEFT JOIN orders o ON o.id = cr.source_order_id
          WHERE e.store_id = ?
          ORDER BY e.id DESC
          LIMIT 250",
@@ -469,6 +505,47 @@ include '../includes/header.php';
                     </div>
                 </div>
             </div>
+            <div style="display:grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 15px;">
+                <div class="stat-card" style="padding: 14px;">
+                    <div class="text-muted">طلبات مرتبطة</div>
+                    <div style="font-size: 20px; font-weight: 700;"><?php echo (int) ($requestSummary['total_requests'] ?? 0); ?></div>
+                </div>
+                <div class="stat-card" style="padding: 14px;">
+                    <div class="text-muted">طلبات نشطة</div>
+                    <div style="font-size: 20px; font-weight: 700; color:#2563eb;"><?php echo (int) ($requestSummary['active_requests'] ?? 0); ?></div>
+                </div>
+                <div class="stat-card" style="padding: 14px;">
+                    <div class="text-muted">قيمة الطلبات</div>
+                    <div style="font-size: 20px; font-weight: 700; color:#7c3aed;"><?php echo number_format((float) ($requestSummary['requests_value'] ?? 0), 2); ?> ⃁</div>
+                </div>
+                <div class="stat-card" style="padding: 14px;">
+                    <div class="text-muted">التقييمات</div>
+                    <div style="font-size: 20px; font-weight: 700; color:#d97706;">
+                        ⭐ <?php echo number_format((float) ($reviewsSummary['avg_rating'] ?? 0), 1); ?>
+                        <small style="font-size: 12px; color:#64748b;">(<?php echo (int) ($reviewsSummary['reviews_count'] ?? 0); ?>)</small>
+                    </div>
+                </div>
+            </div>
+
+            <?php if (!empty($sourceTotals)): ?>
+                <div style="border:1px solid #e5e7eb; border-radius: 12px; padding: 12px; margin-bottom: 18px;">
+                    <strong style="display:block; margin-bottom: 10px;">ملخص الحركات حسب المصدر</strong>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        <?php foreach ($sourceTotals as $sourceTotal): ?>
+                            <?php
+                                $typeLabel = ($sourceTotal['entry_type'] ?? '') === 'credit' ? 'دائن' : 'مدين';
+                                $typeClass = ($sourceTotal['entry_type'] ?? '') === 'credit' ? 'badge-success' : 'badge-danger';
+                            ?>
+                            <span class="badge <?php echo $typeClass; ?>" style="padding: 8px 10px;">
+                                <?php echo htmlspecialchars((string) ($sourceTotal['source'] ?? 'manual'), ENT_QUOTES, 'UTF-8'); ?>
+                                - <?php echo $typeLabel; ?>:
+                                <?php echo number_format((float) ($sourceTotal['total_amount'] ?? 0), 2); ?> ⃁
+                                (<?php echo (int) ($sourceTotal['rows_count'] ?? 0); ?>)
+                            </span>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+            <?php endif; ?>
 
             <form method="POST" style="border:1px solid #e5e7eb; border-radius: 12px; padding: 12px; margin-bottom: 18px;">
                 <input type="hidden" name="action" value="add_account_entry">
@@ -511,6 +588,7 @@ include '../includes/header.php';
                             <th>النوع</th>
                             <th>المصدر</th>
                             <th>المبلغ</th>
+                            <th>المرجع</th>
                             <th>ملاحظات</th>
                             <th>بواسطة</th>
                             <th>التاريخ</th>
@@ -527,6 +605,21 @@ include '../includes/header.php';
                                 </td>
                                 <td><?php echo htmlspecialchars((string) ($entry['source'] ?? 'manual'), ENT_QUOTES, 'UTF-8'); ?></td>
                                 <td><?php echo number_format((float) ($entry['amount'] ?? 0), 2); ?> ⃁</td>
+                                <td>
+                                    <?php if (!empty($entry['request_number'])): ?>
+                                        <a href="container-requests.php?action=edit&id=<?php echo (int) ($entry['reference_id'] ?? 0); ?>" class="badge badge-primary">
+                                            <?php echo htmlspecialchars((string) $entry['request_number'], ENT_QUOTES, 'UTF-8'); ?>
+                                        </a>
+                                        <?php if (!empty($entry['source_order_id'])): ?>
+                                            <br>
+                                            <a href="orders.php?action=view&id=<?php echo (int) $entry['source_order_id']; ?>" style="font-size: 12px;">
+                                                طلب التطبيق #<?php echo htmlspecialchars((string) ($entry['order_number'] ?: $entry['source_order_id']), ENT_QUOTES, 'UTF-8'); ?>
+                                            </a>
+                                        <?php endif; ?>
+                                    <?php else: ?>
+                                        <span class="text-muted">-</span>
+                                    <?php endif; ?>
+                                </td>
                                 <td><?php echo htmlspecialchars((string) ($entry['notes'] ?? '-'), ENT_QUOTES, 'UTF-8'); ?></td>
                                 <td><?php echo htmlspecialchars((string) ($entry['admin_name'] ?? '-'), ENT_QUOTES, 'UTF-8'); ?></td>
                                 <td><?php echo formatDateTime($entry['created_at']); ?></td>
@@ -534,7 +627,7 @@ include '../includes/header.php';
                         <?php endforeach; ?>
                         <?php if (empty($entries)): ?>
                             <tr>
-                                <td colspan="7" class="text-center">لا توجد حركات حساب حتى الآن</td>
+                                <td colspan="8" class="text-center">لا توجد حركات حساب حتى الآن</td>
                             </tr>
                         <?php endif; ?>
                     </tbody>

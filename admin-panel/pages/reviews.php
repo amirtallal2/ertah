@@ -5,19 +5,33 @@
  */
 
 require_once '../init.php';
+require_once '../includes/special_services.php';
 requireLogin();
 
 $pageTitle = 'التقييمات';
 $pageSubtitle = 'مراجعة آراء العملاء وتقييماتهم';
 
+ensureSpecialServicesSchema();
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && post('action') === 'delete') {
     $reviewId = (int)post('review_id');
-    db()->delete('reviews', 'id = ?', [$reviewId]);
+    $reviewType = trim((string) post('review_type', 'provider'));
+    if ($reviewType === 'container_store') {
+        $review = db()->fetch('SELECT store_id FROM container_store_reviews WHERE id = ? LIMIT 1', [$reviewId]);
+        db()->delete('container_store_reviews', 'id = ?', [$reviewId]);
+        if (!empty($review['store_id'])) {
+            specialRecalculateContainerStoreRating((int) $review['store_id']);
+        }
+    } else {
+        db()->delete('reviews', 'id = ?', [$reviewId]);
+    }
     setFlashMessage('success', 'تم حذف التقييم');
     redirect('reviews.php');
 }
 
-$reviews = db()->fetchAll("
+$reviews = [];
+
+$providerReviews = db()->fetchAll("
     SELECT r.*, u.full_name as user_name, p.full_name as provider_name, o.order_number
     FROM reviews r
     LEFT JOIN users u ON r.user_id = u.id
@@ -26,6 +40,33 @@ $reviews = db()->fetchAll("
     ORDER BY r.created_at DESC
     LIMIT 100
 "); // Assuming reviews table exists
+foreach ($providerReviews as $review) {
+    $review['review_type'] = 'provider';
+    $review['target_label'] = 'مقدم خدمة';
+    $reviews[] = $review;
+}
+
+if (specialServiceTableExists('container_store_reviews')) {
+    $storeReviews = db()->fetchAll("
+        SELECT r.*, u.full_name as user_name, cs.name_ar as provider_name, o.order_number
+        FROM container_store_reviews r
+        LEFT JOIN users u ON r.user_id = u.id
+        LEFT JOIN container_stores cs ON r.store_id = cs.id
+        LEFT JOIN orders o ON r.order_id = o.id
+        ORDER BY r.created_at DESC
+        LIMIT 100
+    ");
+    foreach ($storeReviews as $review) {
+        $review['review_type'] = 'container_store';
+        $review['target_label'] = 'متجر حاويات';
+        $reviews[] = $review;
+    }
+}
+
+usort($reviews, static function (array $a, array $b): int {
+    return strtotime((string) ($b['created_at'] ?? '')) <=> strtotime((string) ($a['created_at'] ?? ''));
+});
+$reviews = array_slice($reviews, 0, 100);
 
 include '../includes/header.php';
 ?>
@@ -43,7 +84,7 @@ include '../includes/header.php';
                     <thead>
                         <tr>
                             <th>العميل</th>
-                            <th>المقيم (مقدم الخدمة)</th>
+                            <th>المقيَّم</th>
                             <th>الطلب</th>
                             <th>التقييم</th>
                             <th>تفاصيل التقييم</th>
@@ -56,7 +97,12 @@ include '../includes/header.php';
                         <?php foreach($reviews as $r): ?>
                         <tr>
                             <td><?php echo $r['user_name']; ?></td>
-                            <td><?php echo $r['provider_name']; ?></td>
+                            <td>
+                                <?php echo htmlspecialchars((string) ($r['provider_name'] ?? '-'), ENT_QUOTES, 'UTF-8'); ?><br>
+                                <span class="badge <?php echo ($r['review_type'] ?? '') === 'container_store' ? 'badge-primary' : 'badge-success'; ?>">
+                                    <?php echo htmlspecialchars((string) ($r['target_label'] ?? 'مقدم خدمة'), ENT_QUOTES, 'UTF-8'); ?>
+                                </span>
+                            </td>
                             <td>
                                 <?php if($r['order_number']): ?>
                                 <a href="orders.php?action=view&id=<?php echo (int)$r['order_id']; ?>">#<?php echo $r['order_number']; ?></a>
@@ -97,6 +143,7 @@ include '../includes/header.php';
                                 <form method="POST" onsubmit="return confirm('حذف هذا التقييم؟');">
                                     <input type="hidden" name="action" value="delete">
                                     <input type="hidden" name="review_id" value="<?php echo $r['id']; ?>">
+                                    <input type="hidden" name="review_type" value="<?php echo htmlspecialchars((string) ($r['review_type'] ?? 'provider'), ENT_QUOTES, 'UTF-8'); ?>">
                                     <button class="btn btn-sm btn-danger"><i class="fas fa-trash"></i></button>
                                 </form>
                             </td>

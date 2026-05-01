@@ -287,6 +287,7 @@ class _OrdersScreenState extends State<OrdersScreen>
     final paidAmount = _paidAmount(order);
     final trackingOrderId = _resolveTrackingOrderId(order);
     final isVirtualSpecialOrder = trackingOrderId <= 0;
+    final providerLabel = _resolveOrderProviderLabel(order);
     return GestureDetector(
       onTap: () async {
         if (isVirtualSpecialOrder) {
@@ -360,7 +361,7 @@ class _OrdersScreenState extends State<OrdersScreen>
                       ),
                       const SizedBox(height: 4),
                       Text(
-                        '#${_displayOrderReference(order)} • ${order['provider_name'] ?? context.tr('searching_provider')}',
+                        '#${_displayOrderReference(order)} • $providerLabel',
                         style: const TextStyle(
                           fontSize: 11,
                           color: AppColors.gray500,
@@ -478,10 +479,10 @@ class _OrdersScreenState extends State<OrdersScreen>
                               createdAt: DateTime.now(),
                             ),
                             providerName:
-                                order['provider_name'] ??
-                                context.tr(
-                                  'service_provider',
-                                ), // Assuming this key exists or create one
+                                providerLabel ==
+                                    context.tr('searching_provider')
+                                ? context.tr('service_provider')
+                                : providerLabel,
                             orderNumber: order['id'].toString(),
                             onSubmit: () {
                               if (!context.mounted) return;
@@ -541,6 +542,36 @@ class _OrdersScreenState extends State<OrdersScreen>
     }
 
     return context.tr('unknown_service');
+  }
+
+  String _resolveOrderProviderLabel(Map<String, dynamic> order) {
+    final direct =
+        [
+              order['provider_name'],
+              order['service_party_name'],
+              order['container_store_name'],
+            ]
+            .map((value) => (value ?? '').toString().trim())
+            .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+    if (direct.isNotEmpty) {
+      return direct;
+    }
+
+    final rawStore = order['container_store'];
+    if (rawStore is Map) {
+      final store = Map<String, dynamic>.from(
+        rawStore.map((key, value) => MapEntry(key.toString(), value)),
+      );
+      final storeName =
+          [store['name_ar'], store['name'], store['name_en'], store['name_ur']]
+              .map((value) => (value ?? '').toString().trim())
+              .firstWhere((value) => value.isNotEmpty, orElse: () => '');
+      if (storeName.isNotEmpty) {
+        return storeName;
+      }
+    }
+
+    return context.tr('searching_provider');
   }
 
   int _resolveTrackingOrderId(Map<String, dynamic> order) {

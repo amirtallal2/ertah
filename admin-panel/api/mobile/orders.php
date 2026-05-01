@@ -2545,13 +2545,20 @@ function createOrder($input)
         );
     }
 
-    if (!empty($serviceIds)) {
+    $isSpecialModuleOrder = $isContainerModule || $isFurnitureModule;
+    $orderServiceIds = $serviceIds;
+
+    if (!empty($serviceIds) && !$isSpecialModuleOrder) {
         $coverageAreaIds = ordersCoverageAreaIds($coverage);
         $allowedServiceIds = ordersResolveAllowedServiceIds($serviceIds, $coverageAreaIds);
         if (count($allowedServiceIds) !== count($serviceIds)) {
             sendError('بعض الخدمات المختارة غير متاحة في نطاقك الحالي', 422);
         }
         $serviceIds = $allowedServiceIds;
+        $orderServiceIds = $serviceIds;
+    } elseif ($isSpecialModuleOrder) {
+        // خدمات الحاويات/نقل العفش لها جداول مستقلة، فلا نخزن IDs الخاصة بها كخدمات فرعية عادية.
+        $orderServiceIds = [];
     }
 
     if (!empty($serviceIds)) {
@@ -2666,7 +2673,7 @@ function createOrder($input)
 
     $orderId = $conn->insert_id;
     applyOrderLifecycleDefaults($orderId, $scheduledDate, $scheduledTime, $inspectionFee);
-    persistOrderServiceItems($orderId, $serviceIds, $isCustomService ? $customServiceTitle : '', $customServiceDescription);
+    persistOrderServiceItems($orderId, $orderServiceIds, $isCustomService ? $customServiceTitle : '', $customServiceDescription);
     persistOrderRequestedSpareParts($orderId, $requestedSpareParts, $problemDetails, $categoryId);
     syncSpecialServiceRequestFromOrder($orderId, $userId, $problemDetails, $uploadedFiles, $notes, $address);
 
@@ -2877,7 +2884,11 @@ function rateOrder($input)
     }
 
     // Verify order
-    $stmt = $conn->prepare("SELECT id, provider_id, status FROM orders WHERE id = ? AND user_id = ?");
+    $selectColumns = 'id, provider_id, status';
+    if (orderColumnExists('problem_details')) {
+        $selectColumns .= ', problem_details';
+    }
+    $stmt = $conn->prepare("SELECT {$selectColumns} FROM orders WHERE id = ? AND user_id = ?");
     $stmt->bind_param("ii", $orderId, $userId);
     $stmt->execute();
     $order = $stmt->get_result()->fetch_assoc();
@@ -2892,7 +2903,46 @@ function rateOrder($input)
 
     $reviewProviderId = !empty($order['provider_id']) ? (int) $order['provider_id'] : resolveOrderReviewProviderId($orderId);
     if ($reviewProviderId <= 0) {
-        sendError('لا يمكن إضافة تقييم قبل تعيين مقدم الخدمة', 422);
+        $containerStore = resolveOrderReviewContainerStore($orderId, $order['problem_details'] ?? null);
+        if (!empty($containerStore['store_id'])) {
+            ensureSpecialServicesSchema();
+            if (!tableExists('container_store_reviews')) {
+                sendError('تعذر تجهيز تقييم متجر الحاويات حالياً', 500);
+            }
+
+            $storeId = (int) $containerStore['store_id'];
+            $existingStoreReview = db()->fetch(
+                'SELECT id FROM container_store_reviews WHERE order_id = ? LIMIT 1',
+                [$orderId]
+            );
+            if (empty($existingStoreReview['id'])) {
+                $tagsJson = $tags !== null
+                    ? (is_array($tags) ? json_encode(array_values($tags), JSON_UNESCAPED_UNICODE) : (string) $tags)
+                    : null;
+                db()->insert('container_store_reviews', [
+                    'store_id' => $storeId,
+                    'user_id' => $userId,
+                    'order_id' => $orderId,
+                    'rating' => $rating,
+                    'comment' => $comment,
+                    'quality_rating' => $qualityRating,
+                    'speed_rating' => $speedRating,
+                    'price_rating' => $priceRating,
+                    'behavior_rating' => $behaviorRating,
+                    'tags' => $tagsJson,
+                ]);
+            }
+
+            specialRecalculateContainerStoreRating($storeId);
+
+            $stmt = $conn->prepare("UPDATE orders SET is_rated = 1 WHERE id = ?");
+            $stmt->bind_param("i", $orderId);
+            $stmt->execute();
+
+            sendSuccess(null, 'شكراً لتقييمك');
+        }
+
+        sendError('لا يمكن إضافة تقييم قبل تعيين مقدم خدمة أو متجر حاويات', 422);
     }
 
     // Create review with optional detailed fields if schema supports it.
@@ -5265,6 +5315,8 @@ function fetchOrderContainerStoreAssignment($orderId, array $problemDetails = []
 
     $storeRow = null;
     $requestId = null;
+    $storeRatingSelect = tableColumnExists('container_stores', 'rating') ? 'cst.rating' : '0 AS rating';
+    $storeReviewsSelect = tableColumnExists('container_stores', 'reviews_count') ? 'cst.reviews_count' : '0 AS reviews_count';
 
     if (
         $orderId > 0
@@ -5284,7 +5336,9 @@ function fetchOrderContainerStoreAssignment($orderId, array $problemDetails = []
                        cst.address,
                        cst.logo,
                        cst.notes,
-                       cst.is_active
+                       cst.is_active,
+                       {$storeRatingSelect},
+                       {$storeReviewsSelect}
                 FROM container_requests cr
                 LEFT JOIN container_services cs ON cs.id = cr.container_service_id
                 LEFT JOIN container_stores cst ON cst.id = COALESCE(cr.container_store_id, cs.store_id)
@@ -5340,8 +5394,11 @@ function fetchOrderContainerStoreAssignment($orderId, array $problemDetails = []
         }
 
         if ($storeId > 0) {
+            $fallbackRatingSelect = tableColumnExists('container_stores', 'rating') ? 'rating' : '0 AS rating';
+            $fallbackReviewsSelect = tableColumnExists('container_stores', 'reviews_count') ? 'reviews_count' : '0 AS reviews_count';
             $stmt = $conn->prepare(
-                "SELECT id AS store_id, name_ar, name_en, name_ur, contact_person, phone, email, address, logo, notes, is_active
+                "SELECT id AS store_id, name_ar, name_en, name_ur, contact_person, phone, email, address, logo, notes, is_active,
+                        {$fallbackRatingSelect}, {$fallbackReviewsSelect}
                  FROM container_stores
                  WHERE id = ?
                  LIMIT 1"
@@ -5377,6 +5434,8 @@ function fetchOrderContainerStoreAssignment($orderId, array $problemDetails = []
         'address' => trim((string) ($storeRow['address'] ?? '')),
         'logo' => $logo !== '' ? imageUrl($logo) : null,
         'notes' => trim((string) ($storeRow['notes'] ?? '')),
+        'rating' => isset($storeRow['rating']) ? (float) $storeRow['rating'] : 0.0,
+        'reviews_count' => isset($storeRow['reviews_count']) ? (int) $storeRow['reviews_count'] : 0,
         'is_active' => isset($storeRow['is_active']) ? ((int) $storeRow['is_active'] === 1) : null,
     ];
 }
@@ -5769,6 +5828,46 @@ function formatOrder($row, array $context = [])
         ? (bool) $selectedProvider['provider_is_available']
         : (isset($row['provider_is_available']) ? ((int) $row['provider_is_available'] === 1) : null);
     $providerWhatsapp = fetchProviderWhatsAppNumber($providerId, $providerPhone);
+    $servicePartyType = $providerId !== null ? 'provider' : null;
+    $servicePartyId = $providerId;
+    $servicePartyName = $providerName;
+    $containerStoreActsAsProvider = false;
+
+    if ($containerStore !== null && trim((string) $providerName) === '') {
+        $containerStoreActsAsProvider = true;
+        $servicePartyType = 'container_store';
+        $servicePartyId = (int) ($containerStore['store_id'] ?? 0);
+        $servicePartyName = $containerStore['name'] ?? null;
+        $providerName = $servicePartyName;
+        $providerPhone = $containerStore['phone'] ?? null;
+        $providerWhatsapp = trim((string) ($containerStore['whatsapp'] ?? ''));
+        if ($providerWhatsapp === '') {
+            $providerWhatsapp = trim((string) ($containerStore['phone'] ?? ''));
+        }
+        $providerEmail = $containerStore['email'] ?? null;
+        $providerAvatar = $containerStore['logo'] ?? null;
+        $providerRating = isset($containerStore['rating']) ? (float) $containerStore['rating'] : null;
+        $providerStatus = !empty($containerStore['is_active']) ? 'approved' : 'inactive';
+        $providerIsAvailable = isset($containerStore['is_active']) ? (bool) $containerStore['is_active'] : null;
+        $selectedProvider = [
+            'provider_id' => null,
+            'provider_name' => $providerName,
+            'provider_phone' => $providerPhone,
+            'provider_email' => $providerEmail,
+            'provider_avatar' => $providerAvatar,
+            'provider_rating' => null,
+            'provider_status' => $providerStatus,
+            'provider_is_available' => $providerIsAvailable,
+            'assignment_status' => $row['status'] ?? 'assigned',
+            'is_primary' => true,
+            'service_party_type' => 'container_store',
+            'container_store_id' => $servicePartyId,
+        ];
+    } elseif ($containerStore !== null && $servicePartyType === null) {
+        $servicePartyType = 'container_store';
+        $servicePartyId = (int) ($containerStore['store_id'] ?? 0);
+        $servicePartyName = $containerStore['name'] ?? null;
+    }
 
     $contextRole = (string) ($context['role'] ?? '');
     $contextProviderId = (int) ($context['provider_id'] ?? 0);
@@ -5858,6 +5957,10 @@ function formatOrder($row, array $context = [])
         'provider_status' => $providerStatus,
         'provider_is_available' => $providerIsAvailable,
         'selected_provider' => $selectedProvider,
+        'service_party_type' => $servicePartyType,
+        'service_party_id' => $servicePartyId,
+        'service_party_name' => $servicePartyName,
+        'service_party_is_container_store' => $containerStoreActsAsProvider,
         'container_store' => $containerStore,
         'container_store_id' => $containerStore['store_id'] ?? null,
         'container_store_name' => $containerStore['name'] ?? null,
@@ -7056,6 +7159,24 @@ function fetchOrderServiceItems($orderId, $orderRow = null)
         }
     }
 
+    $specialModule = specialDetectOrderModuleFromProblemDetails($problemDetails);
+    if ($specialModule !== '') {
+        $specialName = resolveOrderDisplayNameFromProblemDetails($problemDetails);
+        if ($specialName === '') {
+            $specialName = $specialModule === 'container' ? 'طلب خدمة الحاويات' : 'طلب نقل العفش';
+        }
+
+        return [
+            [
+                'id' => 0,
+                'service_id' => null,
+                'service_name' => $specialName,
+                'is_custom' => true,
+                'notes' => '',
+            ],
+        ];
+    }
+
     $serviceIds = normalizeIntegerIds($problemDetails['service_type_ids'] ?? ($problemDetails['sub_services'] ?? []));
     if (!empty($serviceIds)) {
         $placeholders = implode(',', array_fill(0, count($serviceIds), '?'));
@@ -7292,6 +7413,30 @@ function resolveOrderReviewProviderId($orderId)
         return 0;
     }
     return (int) $row['provider_id'];
+}
+
+function resolveOrderReviewContainerStore($orderId, $problemDetailsRaw = null): ?array
+{
+    $orderId = (int) $orderId;
+    if ($orderId <= 0 || !tableExists('container_stores')) {
+        return null;
+    }
+
+    $problemDetails = [];
+    if (is_array($problemDetailsRaw)) {
+        $problemDetails = $problemDetailsRaw;
+    } elseif (is_object($problemDetailsRaw)) {
+        $problemDetails = (array) $problemDetailsRaw;
+    } elseif (is_string($problemDetailsRaw) && trim($problemDetailsRaw) !== '') {
+        $problemDetails = decodeOrderProblemDetailsPayload($problemDetailsRaw);
+    }
+
+    $store = fetchOrderContainerStoreAssignment($orderId, $problemDetails);
+    if ($store !== null && !empty($store['store_id'])) {
+        return $store;
+    }
+
+    return null;
 }
 
 /**
@@ -7930,7 +8075,8 @@ function syncSpecialServiceRequestFromOrder($orderId, $userId, array $problemDet
             'source_order_id' => $orderId,
         ];
 
-        db()->insert('container_requests', $insertData);
+        $newRequestId = (int) db()->insert('container_requests', $insertData);
+        specialSyncContainerStoreAccountEntryForRequest($newRequestId);
         return;
     }
 

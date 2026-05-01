@@ -482,8 +482,20 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
   }
 
   String get _providerName {
+    if (_isContainerOrder) {
+      final storeName = _containerStoreName(_containerStoreInfo);
+      if (storeName.isNotEmpty) return storeName;
+    }
     final fromApi = (_order?['provider_name'] ?? '').toString().trim();
     if (fromApi.isNotEmpty) return fromApi;
+    final servicePartyName = (_order?['service_party_name'] ?? '')
+        .toString()
+        .trim();
+    if (servicePartyName.isNotEmpty) return servicePartyName;
+    final containerStoreName = (_order?['container_store_name'] ?? '')
+        .toString()
+        .trim();
+    if (containerStoreName.isNotEmpty) return containerStoreName;
     return context.tr('service_provider');
   }
 
@@ -780,8 +792,19 @@ class _OrderTrackingScreenState extends State<OrderTrackingScreen> {
 
   bool get _hasPendingInvoice => _rawInvoiceStatus == 'pending';
 
-  bool get _hasProvider =>
-      (_order?['provider_name'] ?? '').toString().trim().isNotEmpty;
+  bool get _hasProvider {
+    if ((_order?['provider_name'] ?? '').toString().trim().isNotEmpty) {
+      return true;
+    }
+    if ((_order?['service_party_name'] ?? '').toString().trim().isNotEmpty) {
+      return true;
+    }
+    if ((_order?['container_store_name'] ?? '').toString().trim().isNotEmpty) {
+      return true;
+    }
+    return _isContainerOrder &&
+        _containerStoreName(_containerStoreInfo).isNotEmpty;
+  }
 
   bool get _canCancelOrder {
     final isCancelableStatus = ['pending', 'assigned'].contains(_status);

@@ -272,14 +272,20 @@ CREATE TABLE `container_services` (
   `id` INT PRIMARY KEY AUTO_INCREMENT,
   `name_ar` VARCHAR(150) NOT NULL,
   `name_en` VARCHAR(150) DEFAULT NULL,
+  `name_ur` VARCHAR(150) DEFAULT NULL,
   `description_ar` TEXT DEFAULT NULL,
   `description_en` TEXT DEFAULT NULL,
+  `description_ur` TEXT DEFAULT NULL,
   `container_size` VARCHAR(100) NOT NULL,
   `capacity_ton` DECIMAL(6,2) NOT NULL DEFAULT 0.00,
   `daily_price` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   `weekly_price` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   `monthly_price` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
   `delivery_fee` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `price_per_kg` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `price_per_meter` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `minimum_charge` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `store_id` INT DEFAULT NULL,
   `price_note` VARCHAR(255) DEFAULT NULL,
   `image` VARCHAR(255) DEFAULT NULL,
   `is_active` TINYINT(1) NOT NULL DEFAULT 1,
@@ -313,6 +319,12 @@ CREATE TABLE `container_requests` (
   `status` VARCHAR(32) NOT NULL DEFAULT 'new',
   `estimated_price` DECIMAL(10,2) DEFAULT NULL,
   `final_price` DECIMAL(10,2) DEFAULT NULL,
+  `estimated_weight_kg` DECIMAL(10,2) DEFAULT NULL,
+  `estimated_distance_meters` DECIMAL(10,2) DEFAULT NULL,
+  `details_json` LONGTEXT DEFAULT NULL,
+  `media_json` LONGTEXT DEFAULT NULL,
+  `source_order_id` INT DEFAULT NULL,
+  `container_store_id` INT DEFAULT NULL,
   `admin_notes` TEXT DEFAULT NULL,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -321,6 +333,66 @@ CREATE TABLE `container_requests` (
   INDEX `idx_container_requests_user` (`user_id`),
   INDEX `idx_container_requests_start_date` (`start_date`),
   INDEX `idx_container_requests_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- =====================================================
+-- متاجر الحاويات وحساباتها (Container Stores Accounts)
+-- =====================================================
+DROP TABLE IF EXISTS `container_stores`;
+CREATE TABLE `container_stores` (
+  `id` INT PRIMARY KEY AUTO_INCREMENT,
+  `name_ar` VARCHAR(150) NOT NULL,
+  `name_en` VARCHAR(150) DEFAULT NULL,
+  `name_ur` VARCHAR(150) DEFAULT NULL,
+  `contact_person` VARCHAR(150) DEFAULT NULL,
+  `phone` VARCHAR(40) DEFAULT NULL,
+  `email` VARCHAR(150) DEFAULT NULL,
+  `address` TEXT DEFAULT NULL,
+  `logo` VARCHAR(255) DEFAULT NULL,
+  `notes` TEXT DEFAULT NULL,
+  `rating` DECIMAL(3,2) NOT NULL DEFAULT 0.00,
+  `reviews_count` INT NOT NULL DEFAULT 0,
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `sort_order` INT NOT NULL DEFAULT 0,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_container_stores_active_sort` (`is_active`, `sort_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+DROP TABLE IF EXISTS `container_store_account_entries`;
+CREATE TABLE `container_store_account_entries` (
+  `id` INT PRIMARY KEY AUTO_INCREMENT,
+  `store_id` INT NOT NULL,
+  `entry_type` ENUM('credit','debit') NOT NULL,
+  `amount` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `source` ENUM('manual','request','payment','settlement','adjustment') NOT NULL DEFAULT 'manual',
+  `reference_type` VARCHAR(60) DEFAULT NULL,
+  `reference_id` INT DEFAULT NULL,
+  `notes` VARCHAR(255) DEFAULT NULL,
+  `created_by` INT DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  INDEX `idx_container_store_account_store` (`store_id`),
+  INDEX `idx_container_store_account_created` (`created_at`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+DROP TABLE IF EXISTS `container_store_reviews`;
+CREATE TABLE `container_store_reviews` (
+  `id` INT PRIMARY KEY AUTO_INCREMENT,
+  `store_id` INT NOT NULL,
+  `user_id` INT DEFAULT NULL,
+  `order_id` INT DEFAULT NULL,
+  `rating` TINYINT NOT NULL,
+  `comment` TEXT DEFAULT NULL,
+  `quality_rating` TINYINT DEFAULT NULL,
+  `speed_rating` TINYINT DEFAULT NULL,
+  `price_rating` TINYINT DEFAULT NULL,
+  `behavior_rating` TINYINT DEFAULT NULL,
+  `tags` LONGTEXT DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE KEY `uniq_container_store_review_order` (`order_id`),
+  INDEX `idx_container_store_reviews_store` (`store_id`),
+  INDEX `idx_container_store_reviews_user` (`user_id`),
+  INDEX `idx_container_store_reviews_created` (`created_at`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- =====================================================

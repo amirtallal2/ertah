@@ -13,6 +13,7 @@ if (!hasPermission('orders') && getCurrentAdmin()['role'] !== 'super_admin') {
     die('ليس لديك صلاحية الوصول لهذه الصفحة');
 }
 specialBackfillSpecialRequestsFromOrders(300);
+specialBackfillContainerStoreAccountEntries(1000);
 
 $pageTitle = 'طلبات الحاويات';
 $pageSubtitle = 'إدارة الطلبات المخصصة لقسم الحاويات';
@@ -108,11 +109,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if ($postAction === 'add') {
             $data['request_number'] = specialGenerateRequestNumber('CT', 'container_requests');
             $newId = db()->insert('container_requests', $data);
+            specialSyncContainerStoreAccountEntryForRequest((int) $newId, (int) (getCurrentAdmin()['id'] ?? 0));
             logActivity('add_container_request', 'container_requests', $newId);
             setFlashMessage('success', 'تم إضافة طلب الحاويات بنجاح');
         } else {
             $requestId = (int) post('id');
             db()->update('container_requests', $data, 'id = ?', [$requestId]);
+            specialSyncContainerStoreAccountEntryForRequest($requestId, (int) (getCurrentAdmin()['id'] ?? 0));
             logActivity('update_container_request', 'container_requests', $requestId);
             setFlashMessage('success', 'تم تحديث طلب الحاويات بنجاح');
         }
@@ -122,6 +125,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($postAction === 'delete') {
         $requestId = (int) post('id');
+        db()->delete(
+            'container_store_account_entries',
+            'source = ? AND reference_type = ? AND reference_id = ?',
+            ['request', 'container_request', $requestId]
+        );
         db()->delete('container_requests', 'id = ?', [$requestId]);
         logActivity('delete_container_request', 'container_requests', $requestId);
         setFlashMessage('success', 'تم حذف الطلب بنجاح');

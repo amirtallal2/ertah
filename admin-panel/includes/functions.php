@@ -249,6 +249,30 @@ function isOtherServiceCategoryLabel($nameAr, $nameEn = '')
     return $en !== '' && strpos($en, 'other') !== false && strpos($en, 'service') !== false;
 }
 
+function isContainerServiceCategoryLabel($nameAr, $nameEn = '')
+{
+    $ar = normalizeServiceCategoryLabel($nameAr);
+    $en = normalizeServiceCategoryLabel($nameEn);
+
+    if ($ar !== '' && (strpos($ar, 'حاويه') !== false || strpos($ar, 'حاويات') !== false)) {
+        return true;
+    }
+
+    return $en !== '' && strpos($en, 'container') !== false;
+}
+
+function isFurnitureServiceCategoryLabel($nameAr, $nameEn = '')
+{
+    $ar = normalizeServiceCategoryLabel($nameAr);
+    $en = normalizeServiceCategoryLabel($nameEn);
+
+    if ($ar !== '' && (strpos($ar, 'عفش') !== false || strpos($ar, 'اثاث') !== false)) {
+        return true;
+    }
+
+    return $en !== '' && (strpos($en, 'furniture') !== false || strpos($en, 'moving') !== false);
+}
+
 function serviceCategoryImageForApi($image)
 {
     return mediaUrlOrNull($image);
@@ -287,12 +311,27 @@ function serviceCategoryPrimaryMediaForApi($icon, $image, $nameAr = '', $nameEn 
 function serviceCategoryDedupeKeyForApi(array $category)
 {
     $specialModule = trim((string) ($category['special_module'] ?? ''));
-    if ($specialModule !== '') {
-        return 'module:' . strtolower($specialModule);
-    }
-
     $nameAr = $category['name_ar'] ?? '';
     $nameEn = $category['name_en'] ?? '';
+
+    if ($specialModule !== '') {
+        $module = strtolower($specialModule);
+        if ($module === 'container_rental' || strpos($module, 'container') !== false) {
+            return 'category:special_container';
+        }
+        if ($module === 'furniture_moving' || strpos($module, 'furniture') !== false) {
+            return 'category:special_furniture';
+        }
+        return 'module:' . $module;
+    }
+
+    if (isContainerServiceCategoryLabel($nameAr, $nameEn)) {
+        return 'category:special_container';
+    }
+    if (isFurnitureServiceCategoryLabel($nameAr, $nameEn)) {
+        return 'category:special_furniture';
+    }
+
     if (isOtherServiceCategoryLabel($nameAr, $nameEn)) {
         return 'category:other_service';
     }
@@ -309,6 +348,9 @@ function serviceCategoryDedupeKeyForApi(array $category)
 function serviceCategoryApiRank(array $category)
 {
     $rank = 0;
+    if (!empty($category['special_module'])) {
+        $rank += 1000;
+    }
     if (!empty($category['image']) && mediaValueLooksLikeFile($category['image'])) {
         $rank += 100;
     }

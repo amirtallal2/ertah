@@ -166,9 +166,55 @@ function specialEnsureServiceCategory(
     return null;
 }
 
+function specialNormalizeRootServiceCategory(int $categoryId, string $nameAr, string $nameEn, string $icon, int $sortOrder): void
+{
+    if ($categoryId <= 0 || !specialServiceTableExists('service_categories')) {
+        return;
+    }
+
+    $updates = [];
+    $params = [];
+
+    if (specialServiceColumnExists('service_categories', 'parent_id')) {
+        $updates[] = 'parent_id = NULL';
+    }
+    if ($nameAr !== '') {
+        $updates[] = 'name_ar = ?';
+        $params[] = $nameAr;
+    }
+    if ($nameEn !== '' && specialServiceColumnExists('service_categories', 'name_en')) {
+        $updates[] = 'name_en = ?';
+        $params[] = $nameEn;
+    }
+    if ($icon !== '' && specialServiceColumnExists('service_categories', 'icon')) {
+        $updates[] = 'icon = ?';
+        $params[] = $icon;
+    }
+    if (specialServiceColumnExists('service_categories', 'is_active')) {
+        $updates[] = 'is_active = 1';
+    }
+    if (specialServiceColumnExists('service_categories', 'sort_order')) {
+        $updates[] = 'sort_order = ?';
+        $params[] = $sortOrder;
+    }
+    if (specialServiceColumnExists('service_categories', 'warranty_days')) {
+        $updates[] = 'warranty_days = 0';
+    }
+
+    if (empty($updates)) {
+        return;
+    }
+
+    $params[] = $categoryId;
+    db()->query(
+        'UPDATE service_categories SET ' . implode(', ', $updates) . ' WHERE id = ?',
+        $params
+    );
+}
+
 function specialEnsureFurnitureCategoryId(): ?int
 {
-    return specialEnsureServiceCategory(
+    $categoryId = specialEnsureServiceCategory(
         'نقل العفش',
         'Furniture Moving',
         '🚚',
@@ -176,11 +222,17 @@ function specialEnsureFurnitureCategoryId(): ?int
         ['%عفش%', '%نقل العفش%'],
         ['%furniture%', '%moving%']
     );
+
+    if (($categoryId ?? 0) > 0) {
+        specialNormalizeRootServiceCategory((int) $categoryId, 'نقل العفش', 'Furniture Moving', '🚚', 9001);
+    }
+
+    return $categoryId;
 }
 
 function specialEnsureContainerCategoryId(): ?int
 {
-    return specialEnsureServiceCategory(
+    $categoryId = specialEnsureServiceCategory(
         'الحاويات',
         'Containers',
         '📦',
@@ -188,6 +240,12 @@ function specialEnsureContainerCategoryId(): ?int
         ['%حاويات%', '%حاوية%'],
         ['%container%']
     );
+
+    if (($categoryId ?? 0) > 0) {
+        specialNormalizeRootServiceCategory((int) $categoryId, 'الحاويات', 'Containers', '📦', 9002);
+    }
+
+    return $categoryId;
 }
 
 /**
@@ -379,6 +437,25 @@ function ensureSpecialServicesSchema(): void
         INDEX `idx_container_store_account_created` (`created_at`)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
 
+    db()->query("CREATE TABLE IF NOT EXISTS `container_store_reviews` (
+        `id` INT AUTO_INCREMENT PRIMARY KEY,
+        `store_id` INT NOT NULL,
+        `user_id` INT DEFAULT NULL,
+        `order_id` INT DEFAULT NULL,
+        `rating` TINYINT NOT NULL,
+        `comment` TEXT DEFAULT NULL,
+        `quality_rating` TINYINT DEFAULT NULL,
+        `speed_rating` TINYINT DEFAULT NULL,
+        `price_rating` TINYINT DEFAULT NULL,
+        `behavior_rating` TINYINT DEFAULT NULL,
+        `tags` LONGTEXT DEFAULT NULL,
+        `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE KEY `uniq_container_store_review_order` (`order_id`),
+        INDEX `idx_container_store_reviews_store` (`store_id`),
+        INDEX `idx_container_store_reviews_user` (`user_id`),
+        INDEX `idx_container_store_reviews_created` (`created_at`)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci");
+
     // توافق رجعي مع الإصدارات السابقة
     specialEnsureColumn('furniture_requests', 'area_id', 'INT DEFAULT NULL');
     specialEnsureColumn('furniture_requests', 'area_name', 'VARCHAR(150) DEFAULT NULL');
@@ -401,6 +478,13 @@ function ensureSpecialServicesSchema(): void
     specialEnsureColumn('container_services', 'price_per_meter', "DECIMAL(10,2) NOT NULL DEFAULT 0.00");
     specialEnsureColumn('container_services', 'minimum_charge', "DECIMAL(10,2) NOT NULL DEFAULT 0.00");
     specialEnsureColumn('container_services', 'store_id', "INT DEFAULT NULL");
+    specialEnsureColumn('container_stores', 'rating', "DECIMAL(3,2) NOT NULL DEFAULT 0.00");
+    specialEnsureColumn('container_stores', 'reviews_count', "INT NOT NULL DEFAULT 0");
+    specialEnsureColumn('container_store_reviews', 'quality_rating', "TINYINT DEFAULT NULL");
+    specialEnsureColumn('container_store_reviews', 'speed_rating', "TINYINT DEFAULT NULL");
+    specialEnsureColumn('container_store_reviews', 'price_rating', "TINYINT DEFAULT NULL");
+    specialEnsureColumn('container_store_reviews', 'behavior_rating', "TINYINT DEFAULT NULL");
+    specialEnsureColumn('container_store_reviews', 'tags', "LONGTEXT DEFAULT NULL");
 
     // تفاصيل تسعير الطلبات الخاصة
     specialEnsureColumn('furniture_requests', 'estimated_weight_kg', "DECIMAL(10,2) DEFAULT NULL");
@@ -784,6 +868,204 @@ function specialContainerStoreBalance(int $storeId): float
     return round($credit - $debit, 2);
 }
 
+function specialResolveContainerRequestStoreId(array $requestRow): int
+{
+    $storeId = (int) ($requestRow['container_store_id'] ?? 0);
+    if ($storeId > 0) {
+        return $storeId;
+    }
+
+    $serviceId = (int) ($requestRow['container_service_id'] ?? 0);
+    if ($serviceId <= 0 || !specialServiceTableExists('container_services') || !specialServiceColumnExists('container_services', 'store_id')) {
+        return 0;
+    }
+
+    $serviceRow = db()->fetch('SELECT store_id FROM container_services WHERE id = ? LIMIT 1', [$serviceId]);
+    return (int) ($serviceRow['store_id'] ?? 0);
+}
+
+function specialContainerRequestFinancialAmount(array $requestRow): float
+{
+    $finalPrice = specialToPositiveFloat($requestRow['final_price'] ?? 0);
+    if ($finalPrice > 0) {
+        return $finalPrice;
+    }
+
+    $estimatedPrice = specialToPositiveFloat($requestRow['estimated_price'] ?? 0);
+    if ($estimatedPrice > 0) {
+        return $estimatedPrice;
+    }
+
+    $orderTotal = specialToPositiveFloat($requestRow['order_total_amount'] ?? 0);
+    if ($orderTotal > 0) {
+        return $orderTotal;
+    }
+
+    return 0.0;
+}
+
+function specialSyncContainerStoreAccountEntryForRequest(int $requestId, ?int $adminId = null): bool
+{
+    $requestId = (int) $requestId;
+    if ($requestId <= 0) {
+        return false;
+    }
+
+    ensureSpecialServicesSchema();
+    if (!specialServiceTableExists('container_requests') || !specialServiceTableExists('container_store_account_entries')) {
+        return false;
+    }
+
+    $ordersJoin = '';
+    $orderSelect = 'NULL AS order_total_amount, NULL AS order_number';
+    if (specialServiceTableExists('orders') && specialServiceColumnExists('container_requests', 'source_order_id')) {
+        $ordersJoin = 'LEFT JOIN orders o ON o.id = cr.source_order_id';
+        $orderSelect = 'o.total_amount AS order_total_amount, o.order_number AS order_number';
+    }
+
+    $requestRow = db()->fetch(
+        "SELECT cr.*, {$orderSelect}
+         FROM container_requests cr
+         {$ordersJoin}
+         WHERE cr.id = ?
+         LIMIT 1",
+        [$requestId]
+    );
+
+    if (!$requestRow) {
+        db()->delete(
+            'container_store_account_entries',
+            'source = ? AND reference_type = ? AND reference_id = ?',
+            ['request', 'container_request', $requestId]
+        );
+        return false;
+    }
+
+    $storeId = specialResolveContainerRequestStoreId($requestRow);
+    $amount = specialContainerRequestFinancialAmount($requestRow);
+
+    if ($storeId <= 0 || $amount <= 0) {
+        db()->delete(
+            'container_store_account_entries',
+            'source = ? AND reference_type = ? AND reference_id = ?',
+            ['request', 'container_request', $requestId]
+        );
+        return false;
+    }
+
+    $requestNumber = trim((string) ($requestRow['request_number'] ?? ''));
+    $orderNumber = trim((string) ($requestRow['order_number'] ?? ''));
+    $status = specialRequestStatusLabel((string) ($requestRow['status'] ?? 'new'));
+    $notes = 'مستحقات طلب حاوية';
+    if ($requestNumber !== '') {
+        $notes .= ' #' . $requestNumber;
+    }
+    if ($orderNumber !== '') {
+        $notes .= ' / طلب التطبيق #' . $orderNumber;
+    }
+    $notes .= ' - الحالة: ' . $status;
+
+    $existing = db()->fetch(
+        "SELECT id
+         FROM container_store_account_entries
+         WHERE source = ?
+           AND reference_type = ?
+           AND reference_id = ?
+         LIMIT 1",
+        ['request', 'container_request', $requestId]
+    );
+
+    if (!empty($existing['id'])) {
+        db()->update(
+            'container_store_account_entries',
+            [
+                'store_id' => $storeId,
+                'entry_type' => 'credit',
+                'amount' => $amount,
+                'notes' => $notes,
+            ],
+            'id = ?',
+            [(int) $existing['id']]
+        );
+        return true;
+    }
+
+    db()->insert('container_store_account_entries', [
+        'store_id' => $storeId,
+        'entry_type' => 'credit',
+        'amount' => $amount,
+        'source' => 'request',
+        'reference_type' => 'container_request',
+        'reference_id' => $requestId,
+        'notes' => $notes,
+        'created_by' => ($adminId ?? 0) > 0 ? (int) $adminId : null,
+    ]);
+
+    return true;
+}
+
+function specialBackfillContainerStoreAccountEntries(int $limit = 1000): int
+{
+    ensureSpecialServicesSchema();
+    if (!specialServiceTableExists('container_requests') || !specialServiceTableExists('container_store_account_entries')) {
+        return 0;
+    }
+
+    $safeLimit = max(1, min(5000, (int) $limit));
+    $rows = db()->fetchAll(
+        "SELECT cr.id
+         FROM container_requests cr
+         LEFT JOIN container_services cs ON cs.id = cr.container_service_id
+         WHERE COALESCE(cr.container_store_id, cs.store_id) IS NOT NULL
+         ORDER BY cr.id DESC
+         LIMIT {$safeLimit}"
+    );
+
+    $synced = 0;
+    foreach ($rows as $row) {
+        if (specialSyncContainerStoreAccountEntryForRequest((int) ($row['id'] ?? 0))) {
+            $synced++;
+        }
+    }
+
+    return $synced;
+}
+
+function specialRecalculateContainerStoreRating(int $storeId): void
+{
+    $storeId = (int) $storeId;
+    if ($storeId <= 0 || !specialServiceTableExists('container_store_reviews') || !specialServiceTableExists('container_stores')) {
+        return;
+    }
+
+    $row = db()->fetch(
+        'SELECT COALESCE(AVG(rating), 0) AS avg_rating, COUNT(*) AS reviews_count
+         FROM container_store_reviews
+         WHERE store_id = ?',
+        [$storeId]
+    );
+
+    $rating = round((float) ($row['avg_rating'] ?? 0), 2);
+    $reviewsCount = (int) ($row['reviews_count'] ?? 0);
+
+    $updates = [];
+    $params = [];
+    if (specialServiceColumnExists('container_stores', 'rating')) {
+        $updates[] = 'rating = ?';
+        $params[] = $rating;
+    }
+    if (specialServiceColumnExists('container_stores', 'reviews_count')) {
+        $updates[] = 'reviews_count = ?';
+        $params[] = $reviewsCount;
+    }
+    if (empty($updates)) {
+        return;
+    }
+
+    $params[] = $storeId;
+    db()->query('UPDATE container_stores SET ' . implode(', ', $updates) . ' WHERE id = ?', $params);
+}
+
 /**
  * فك ترميز JSON لتفاصيل المشكلة.
  */
@@ -1140,13 +1422,14 @@ function specialBackfillSpecialRequestsFromOrders(int $limit = 250): array
                 'source_order_id' => $orderId,
             ];
 
-            db()->insert('container_requests', $insertData);
+            $newRequestId = (int) db()->insert('container_requests', $insertData);
+            specialSyncContainerStoreAccountEntryForRequest($newRequestId);
 
             // Notify admins about new container request
             try {
                 require_once __DIR__ . '/notification_service.php';
                 ensureNotificationSchema();
-                notifyAdminNewContainerRequest((int)db()->getConnection()->lastInsertId(), [
+                notifyAdminNewContainerRequest($newRequestId, [
                     'request_number'  => $insertData['request_number'],
                     'customer_name'   => $userName,
                     'phone'           => $userPhone,
